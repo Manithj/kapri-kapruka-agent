@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { kapruka, upsizeImage } from "./kapruka";
-import type { CartItem, Product, UICard } from "./types";
+import type { BundleItem, CartItem, Product, ProfileOp, UICard } from "./types";
 
 // ---- OpenAI tool (function) definitions ----
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -188,6 +188,80 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "propose_bundle",
+      description:
+        "Propose a curated gift bundle of 2–4 complementary products (e.g. cake + flowers + card). Renders one card with the combined total and an 'Add all to cart' button. Use real product_ids from prior search/get_product results. Keep the total within the customer's budget when one is given.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "A short, warm name for the bundle, e.g. 'Birthday Surprise for Amma'." },
+          occasion: { type: "string" },
+          budget: { type: "number", description: "Target budget in the currency, if the customer gave one." },
+          currency: { type: "string" },
+          items: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            items: {
+              type: "object",
+              properties: {
+                product_id: { type: "string" },
+                quantity: { type: "integer", description: "1-10. Default 1." },
+                reason: { type: "string", description: "One short line on why this item fits." },
+              },
+              required: ["product_id"],
+            },
+          },
+        },
+        required: ["title", "items"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "compare_products",
+      description:
+        "Show a side-by-side comparison of 2–4 specific products by their product_ids. Use when the customer is torn between options, then give a confident recommendation.",
+      parameters: {
+        type: "object",
+        properties: {
+          product_ids: { type: "array", minItems: 2, maxItems: 4, items: { type: "string" } },
+          currency: { type: "string" },
+        },
+        required: ["product_ids"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "remember",
+      description:
+        "Save a durable fact about the customer so Kapri recalls it next time: a recipient, an occasion (birthday/anniversary), their preferred language, usual city, or active budget. Call this naturally when the customer reveals such a fact — don't announce every save.",
+      parameters: {
+        type: "object",
+        properties: {
+          kind: { type: "string", enum: ["recipient", "occasion", "language", "city", "budget"] },
+          name: { type: "string", description: "Recipient name (kind=recipient)." },
+          relationship: { type: "string", description: "e.g. mother, wife, friend (kind=recipient)." },
+          city: { type: "string", description: "City (kind=recipient or kind=city)." },
+          notes: { type: "string", description: "Anything to remember about the recipient (kind=recipient)." },
+          label: { type: "string", description: "Occasion name, e.g. \"Amma's birthday\" (kind=occasion)." },
+          date: { type: "string", description: "YYYY-MM-DD of the occasion (kind=occasion)." },
+          recurring: { type: "boolean", description: "Does it repeat yearly? Default true (kind=occasion)." },
+          recipient_name: { type: "string", description: "Who the occasion is for (kind=occasion)." },
+          language: { type: "string", enum: ["en", "si", "tanglish"], description: "Preferred language (kind=language)." },
+          amount: { type: "number", description: "Budget amount (kind=budget)." },
+          currency: { type: "string", description: "Budget currency (kind=budget)." },
+        },
+        required: ["kind"],
+      },
+    },
+  },
 ];
 
 // ---- mappers ----
@@ -235,6 +309,36 @@ export interface AgentContext {
 export interface ExecResult {
   result: string; // text returned to the model
   cards: UICard[]; // rich UI streamed to the client
+}
+
+// Translate a `remember` tool call into a client-applied ProfileOp.
+function buildProfileOp(args: any): ProfileOp | null {
+  switch (args.kind) {
+    case "recipient":
+      if (!args.name) return null;
+      return { op: "remember_recipient", name: args.name, relationship: args.relationship, city: args.city, notes: args.notes };
+    case "occasion":
+      if (!args.label || !args.date) return null;
+      return {
+        op: "add_occasion",
+        label: args.label,
+        date: args.date,
+        recurring: args.recurring ?? true,
+        recipientName: args.recipient_name,
+        occasionType: /birthday/i.test(args.label) ? "birthday" : /anniversary/i.test(args.label) ? "anniversary" : "custom",
+      };
+    case "language":
+      if (!args.language) return null;
+      return { op: "set_language", language: args.language };
+    case "city":
+      if (!args.city) return null;
+      return { op: "set_city", city: args.city };
+    case "budget":
+      if (typeof args.amount !== "number") return null;
+      return { op: "set_budget", amount: args.amount, currency: args.currency };
+    default:
+      return null;
+  }
 }
 
 function upsertCart(cart: CartItem[], item: CartItem) {
@@ -434,6 +538,67 @@ export async function executeTool(
         result: `Order ${d.order_number}: ${d.status_display || d.status}. Delivery date ${d.delivery_date || "n/a"}.`,
         cards: [{ component: "tracking", data: d }],
       };
+    }
+
+    case "propose_bundle": {
+      const rawItems: any[] = Array.isArray(args.items) ? args.items.slice(0, 4) : [];
+      const currency = args.currency ?? ctx.currency;
+      const fetched = await Promise.all(
+        rawItems.map((it) => kapruka.getProduct({ product_id: it.product_id, currency }))
+      );
+      const items: BundleItem[] = [];
+      fetched.forEach((res, i) => {
+        if (res.ok) {
+          items.push({
+            product: mapDetailProduct(res.data),
+            quantity: Math.min(10, Math.max(1, rawItems[i].quantity ?? 1)),
+            reason: rawItems[i].reason || undefined,
+          });
+        }
+      });
+      if (items.length < 2) {
+        return {
+          result: "Couldn't load enough valid products for a bundle — search again and use exact product_ids.",
+          cards: [],
+        };
+      }
+      const total = items.reduce((s, it) => s + (it.product.price.amount ?? 0) * it.quantity, 0);
+      const budget = typeof args.budget === "number" ? args.budget : null;
+      const brief = items.map((it) => `${it.quantity}× ${it.product.name} (${currency} ${it.product.price.amount ?? "?"})`).join("; ");
+      return {
+        result: `Bundle "${args.title}" with ${items.length} items, total ${currency} ${total}${
+          budget ? ` (budget ${currency} ${budget}${total > budget ? " — OVER budget, consider trimming" : " — within budget"})` : ""
+        }: ${brief}. Shown as a card with 'Add all to cart'.`,
+        cards: [
+          {
+            component: "bundle",
+            data: { title: args.title, occasion: args.occasion, budget, currency, items, total },
+          },
+        ],
+      };
+    }
+
+    case "compare_products": {
+      const ids: string[] = Array.isArray(args.product_ids) ? args.product_ids.slice(0, 4) : [];
+      const currency = args.currency ?? ctx.currency;
+      const fetched = await Promise.all(ids.map((id) => kapruka.getProduct({ product_id: id, currency })));
+      const products: Product[] = fetched.filter((r) => r.ok).map((r: any) => mapDetailProduct(r.data));
+      if (products.length < 2) {
+        return { result: "Need at least 2 valid products to compare — use exact product_ids from search results.", cards: [] };
+      }
+      const brief = products
+        .map((p) => `${p.name}: ${p.price.currency} ${p.price.amount ?? "?"}, ${p.in_stock ? "in stock" : "out of stock"}`)
+        .join(" | ");
+      return {
+        result: `Comparison shown for ${products.length} products — ${brief}. Now give a confident recommendation.`,
+        cards: [{ component: "compare", data: { products } }],
+      };
+    }
+
+    case "remember": {
+      const op = buildProfileOp(args);
+      if (!op) return { result: "Nothing specific to remember from that.", cards: [] };
+      return { result: "Noted — Kapri will remember that.", cards: [{ component: "profile_op", data: op }] };
     }
 
     default:

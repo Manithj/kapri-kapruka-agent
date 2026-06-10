@@ -25,3 +25,10 @@ export function cartTotal(items: { price: number | null; quantity: number }[]): 
 export function cartCount(items: { quantity: number }[]): number {
   return items.reduce((sum, i) => sum + i.quantity, 0);
 }
+
+// Heuristic: is this product a cake (so we can offer an icing message + preview)?
+export function isCake(p: { name?: string; category?: { name?: string } }): boolean {
+  const hay = `${p.name ?? ""} ${p.category?.name ?? ""}`.toLowerCase();
+  if (/cake|gateau|gâteau|cheesecake/.test(hay)) return true;
+  return false;
+}

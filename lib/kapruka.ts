@@ -62,7 +62,12 @@ function parseSSE(text: string): any {
   throw new Error("Unexpected MCP response: " + text.slice(0, 200));
 }
 
-async function rpcCall(name: string, args: Record<string, any>, allowRetry = true): Promise<string> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const jitter = (base: number) => base + Math.floor(Math.random() * 500);
+
+export class RateLimitError extends Error {}
+
+async function rpcCall(name: string, args: Record<string, any>, attempt = 0): Promise<string> {
   if (!sessionId) await initSession();
   let res: Response;
   try {
@@ -77,22 +82,42 @@ async function rpcCall(name: string, args: Record<string, any>, allowRetry = tru
       }),
     });
   } catch (e) {
-    if (allowRetry) {
+    // Network failure — re-init the session and retry with a little backoff.
+    if (attempt < 2) {
       sessionId = null;
-      return rpcCall(name, args, false);
+      await sleep(jitter(400 * (attempt + 1)));
+      return rpcCall(name, args, attempt + 1);
     }
     throw e;
   }
 
-  if ((res.status === 404 || res.status === 400) && allowRetry) {
+  if ((res.status === 404 || res.status === 400) && attempt < 2) {
     // Session likely expired — re-init once.
     sessionId = null;
-    return rpcCall(name, args, false);
+    return rpcCall(name, args, attempt + 1);
+  }
+
+  if (res.status === 429) {
+    if (attempt < 1) {
+      await sleep(jitter(700));
+      return rpcCall(name, args, attempt + 1);
+    }
+    throw new RateLimitError("Kapruka is briefly rate-limiting requests. Please try again in a moment.");
+  }
+
+  if (res.status >= 500 && attempt < 2) {
+    await sleep(jitter(400 * (attempt + 1)));
+    return rpcCall(name, args, attempt + 1);
   }
 
   const text = await res.text();
   const data = parseSSE(text);
-  if (data.error) throw new Error(data.error.message || "Kapruka MCP error");
+  if (data.error) {
+    if (/rate.?limit|too many requests/i.test(data.error.message || "")) {
+      throw new RateLimitError("Kapruka is briefly rate-limiting requests. Please try again in a moment.");
+    }
+    throw new Error(data.error.message || "Kapruka MCP error");
+  }
   const content = data.result?.content?.[0]?.text;
   if (content == null) throw new Error("Empty result from Kapruka MCP tool " + name);
   return content as string;
@@ -106,8 +131,10 @@ const TTL_MS = 5 * 60 * 1000;
 function cacheGet(key: string) {
   const hit = cache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value;
-  if (hit) cache.delete(key);
-  return undefined;
+  return undefined; // keep expired entries around for stale-on-error fallback
+}
+function cacheGetStale(key: string) {
+  return cache.get(key)?.value;
 }
 function cacheSet(key: string, value: any) {
   cache.set(key, { value, expires: Date.now() + TTL_MS });
@@ -134,6 +161,12 @@ async function callJson<T = any>(
   try {
     raw = await rpcCall(name, { ...args, response_format: "json" });
   } catch (e: any) {
+    // Stale-on-error: if we have a previously cached value for this call, serve it
+    // rather than failing outright (the agent can note results may be slightly old).
+    if (key) {
+      const stale = cacheGetStale(key);
+      if (stale !== undefined) return stale;
+    }
     return { ok: false, message: e?.message || "Kapruka request failed" };
   }
 
