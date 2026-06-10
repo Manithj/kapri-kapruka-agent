@@ -1,13 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ShoppingBag, Sparkles, SquarePen } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, Package, ShoppingBag, Sparkles, SquarePen } from "lucide-react";
 import Composer from "./Composer";
 import CartDrawer from "./CartDrawer";
+import OrdersPanel from "./OrdersPanel";
+import KapriAvatar, { type AvatarState } from "./KapriAvatar";
+import OccasionStrip from "./OccasionStrip";
 import { CardRenderer } from "./Cards";
 import RichText from "./RichText";
 import { cartCount } from "@/lib/format";
-import type { CartItem, ChatMessage, MessagePart, Product, StreamEvent, UICard, WireMessage } from "@/lib/types";
+import {
+  loadProfile,
+  saveProfile,
+  applyProfileOp,
+  logOrder,
+  addOccasion,
+  upcomingOccasions,
+  profileToWire,
+} from "@/lib/profile";
+import type {
+  BundleItem,
+  CartItem,
+  ChatMessage,
+  KapriProfile,
+  MessagePart,
+  Product,
+  StreamEvent,
+  UICard,
+  WireMessage,
+} from "@/lib/types";
 
 const SUGGESTIONS = [
   "🎂 Birthday gift under Rs 5,000",
@@ -50,18 +72,43 @@ function noteForCard(card: UICard): string | null {
       return `Categories listed: ${card.data.categories.map((c) => c.name).join(", ")}`;
     case "cities":
       return `Cities listed: ${card.data.cities.map((c) => c.name).join(", ")}`;
+    case "bundle":
+      return (
+        `Bundle "${card.data.title}" shown (${card.data.currency} ${card.data.total} total) — ` +
+        card.data.items.map((i) => `${i.quantity}× ${i.product.name} (id:${i.product.id})`).join("; ")
+      );
+    case "compare":
+      return (
+        "Comparison shown — " +
+        card.data.products.map((p) => `${p.name} (id:${p.id}, ${p.price.currency} ${p.price.amount ?? "?"})`).join("; ")
+      );
     default:
       return null;
   }
 }
 
 function toWire(msgs: ChatMessage[]): WireMessage[] {
-  return msgs.map((m) => {
+  // Only the latest user message keeps its image bytes (bounds payload + vision tokens).
+  let lastUserIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === "user") {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  return msgs.map((m, idx) => {
     const text = m.parts
       .filter((p): p is Extract<MessagePart, { kind: "text" }> => p.kind === "text")
       .map((p) => p.text)
       .join("");
-    if (m.role === "user") return { role: "user", content: text || "(empty)" };
+    if (m.role === "user") {
+      const images =
+        idx === lastUserIdx
+          ? (m.parts.filter((p) => p.kind === "image") as Extract<MessagePart, { kind: "image" }>[]).map((p) => p.url)
+          : [];
+      const content = text || (images.length ? "(see attached photo)" : "(empty)");
+      return images.length ? { role: "user", content, images } : { role: "user", content };
+    }
     const notes = m.parts
       .filter((p): p is Extract<MessagePart, { kind: "card" }> => p.kind === "card")
       .map((p) => noteForCard(p.card))
@@ -76,15 +123,24 @@ function toWire(msgs: ChatMessage[]): WireMessage[] {
 export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [profile, setProfile] = useState<KapriProfile>(() => ({ v: 1, recipients: [], occasions: [], orders: [] }));
   const [streaming, setStreaming] = useState(false);
   const [toolRunning, setToolRunning] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  const [chips, setChips] = useState<string[]>([]);
+  const [foundPulse, setFoundPulse] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
   const [toast, setToast] = useState<{ id: number; text: string; image?: string | null } | null>(null);
   const [badgeKey, setBadgeKey] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cartRef = useRef<CartItem[]>(cart);
   cartRef.current = cart;
+  const profileRef = useRef<KapriProfile>(profile);
+  profileRef.current = profile;
   const prevCount = useRef(0);
+  const foundTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const celebrateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = useCallback((text: string, image?: string | null) => {
     const id = Date.now();
@@ -104,6 +160,14 @@ export default function Chat() {
       localStorage.setItem("kapri_cart", JSON.stringify(cart));
     } catch {}
   }, [cart]);
+
+  // load / persist the unified profile (memory, occasions, orders, budget)
+  useEffect(() => {
+    setProfile(loadProfile());
+  }, []);
+  useEffect(() => {
+    saveProfile(profile);
+  }, [profile]);
 
   // auto-scroll
   useEffect(() => {
@@ -125,35 +189,80 @@ export default function Chat() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, parts: fn(m.parts) } : m)));
   }, []);
 
-  const addProductToCart = useCallback((p: Product, qty = 1) => {
-    setCart((prev) => {
-      const next = [...prev];
-      const ex = next.find((c) => c.product_id === p.id);
-      if (ex) ex.quantity = Math.min(99, ex.quantity + qty);
-      else
-        next.push({
-          product_id: p.id,
-          name: p.name,
-          image: p.image_url ?? null,
-          price: p.price.amount,
-          currency: p.price.currency,
-          quantity: qty,
-        });
-      return next;
-    });
-    showToast(`Added ${p.name}`, p.image_url);
-  }, [showToast]);
+  const addProductToCart = useCallback(
+    (p: Product, qty = 1, opts?: { icing_text?: string }) => {
+      setCart((prev) => {
+        const next = [...prev];
+        const ex = next.find((c) => c.product_id === p.id);
+        if (ex) {
+          ex.quantity = Math.min(99, ex.quantity + qty);
+          if (opts?.icing_text) ex.icing_text = opts.icing_text;
+        } else
+          next.push({
+            product_id: p.id,
+            name: p.name,
+            image: p.image_url ?? null,
+            price: p.price.amount,
+            currency: p.price.currency,
+            quantity: qty,
+            icing_text: opts?.icing_text ?? null,
+          });
+        return next;
+      });
+      showToast(`Added ${p.name}`, p.image_url);
+    },
+    [showToast]
+  );
+
+  // Add a whole gift bundle at once.
+  const addManyToCart = useCallback(
+    (items: BundleItem[]) => {
+      setCart((prev) => {
+        const next = [...prev];
+        for (const { product: p, quantity } of items) {
+          const ex = next.find((c) => c.product_id === p.id);
+          if (ex) ex.quantity = Math.min(99, ex.quantity + quantity);
+          else
+            next.push({
+              product_id: p.id,
+              name: p.name,
+              image: p.image_url ?? null,
+              price: p.price.amount,
+              currency: p.price.currency,
+              quantity,
+              icing_text: null,
+            });
+        }
+        return next;
+      });
+      showToast(`Added ${items.length} items to your cart 🎁`, items[0]?.product.image_url);
+    },
+    [showToast]
+  );
+
+  // Edit the icing message on a cart line (live preview in the drawer).
+  const setIcing = useCallback((id: string, text: string) => {
+    setCart((prev) =>
+      prev.map((c) => (c.product_id === id ? { ...c, icing_text: text.trim() ? text : null } : c))
+    );
+  }, []);
 
   const newChat = useCallback(() => {
     setMessages([]);
     setToolRunning(null);
     setDrawerOpen(false);
+    setOrdersOpen(false);
+    setChips([]);
   }, []);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, images?: string[]) => {
       if (streaming) return;
-      const userMsg: ChatMessage = { id: nextId(), role: "user", parts: [{ kind: "text", text }] };
+      const userParts: MessagePart[] = [];
+      if (text) userParts.push({ kind: "text", text });
+      for (const url of images || []) userParts.push({ kind: "image", url });
+      if (userParts.length === 0) return;
+      const userMsg: ChatMessage = { id: nextId(), role: "user", parts: userParts };
       const assistantId = nextId();
       const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", parts: [] };
 
@@ -161,12 +270,18 @@ export default function Chat() {
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setStreaming(true);
       setToolRunning(null);
+      setChips([]);
 
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: wire, cart: cartRef.current, currency: "LKR" }),
+          body: JSON.stringify({
+            messages: wire,
+            cart: cartRef.current,
+            currency: "LKR",
+            profile: profileToWire(profileRef.current, new Date().toISOString().slice(0, 10)),
+          }),
         });
         if (!res.ok || !res.body) throw new Error(`Server responded ${res.status}`);
 
@@ -186,6 +301,8 @@ export default function Chat() {
             });
           } else if (ev.type === "tool") {
             setToolRunning(ev.tool);
+          } else if (ev.type === "chips") {
+            setChips(ev.values);
           } else if (ev.type === "ui") {
             if (ev.card.component === "cart_op") {
               setCart(ev.card.data.items);
@@ -193,9 +310,35 @@ export default function Chat() {
                 const last = ev.card.data.items[ev.card.data.items.length - 1];
                 showToast("Added to your cart 🛒", last?.image);
               }
+            } else if (ev.card.component === "profile_op") {
+              setProfile((p) => applyProfileOp(p, (ev.card as Extract<UICard, { component: "profile_op" }>).data));
+              showToast("Kapri will remember that ✨");
             } else {
               setToolRunning(null);
-              appendToAssistant(assistantId, (parts) => [...parts, { kind: "card", card: ev.card }]);
+              if (ev.card.component === "products" || ev.card.component === "bundle") {
+                if (foundTimer.current) clearTimeout(foundTimer.current);
+                setFoundPulse(true);
+                foundTimer.current = setTimeout(() => setFoundPulse(false), 1600);
+              }
+              if (ev.card.component === "order") {
+                const o = ev.card.data;
+                setProfile((p) =>
+                  logOrder(p, {
+                    order_ref: o.order_ref,
+                    placedAt: new Date().toISOString(),
+                    total: o.summary?.grand_total ?? 0,
+                    currency: o.summary?.currency ?? "LKR",
+                    recipient: o.recipient?.name,
+                    city: o.recipient?.city,
+                    items: (o.items || []).map((it) => ({ name: it.name, quantity: it.quantity })),
+                  })
+                );
+                if (celebrateTimer.current) clearTimeout(celebrateTimer.current);
+                setCelebrate(true);
+                celebrateTimer.current = setTimeout(() => setCelebrate(false), 2500);
+              }
+              const card = ev.card;
+              appendToAssistant(assistantId, (parts) => [...parts, { kind: "card", card }]);
             }
           } else if (ev.type === "error") {
             appendToAssistant(assistantId, (parts) => [...parts, { kind: "text", text: `⚠️ ${ev.value}` }]);
@@ -234,6 +377,18 @@ export default function Chat() {
 
   const count = cartCount(cart);
   const empty = messages.length === 0;
+  const today = new Date().toISOString().slice(0, 10);
+  const occasions = useMemo(() => upcomingOccasions(profile, today, 30), [profile, today]);
+
+  const avatarState: AvatarState = celebrate
+    ? "celebrating"
+    : foundPulse
+    ? "found"
+    : toolRunning && /search|get_product|list|propose_bundle|compare/.test(toolRunning)
+    ? "searching"
+    : streaming
+    ? "thinking"
+    : "idle";
 
   return (
     <div className="flex h-[100dvh] flex-col">
@@ -241,15 +396,22 @@ export default function Chat() {
       <header className="sticky top-0 z-30 border-b border-black/5 bg-cream-50/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
           <button onClick={newChat} className="flex items-center gap-2.5 text-left" aria-label="Go to home">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-emerald-deep to-emerald-ink text-cream-50 shadow">
-              <span className="font-display text-lg leading-none">ක</span>
-            </div>
+            <KapriAvatar state={avatarState} size={36} className="shadow" />
             <div className="leading-tight">
               <p className="font-display text-lg font-semibold text-emerald-ink">Kapri</p>
               <p className="text-[11px] text-ink/45">Your Kapruka gift concierge 🇱🇰</p>
             </div>
           </button>
           <div className="flex items-center gap-2">
+            {profile.orders.length > 0 ? (
+              <button
+                onClick={() => setOrdersOpen(true)}
+                className="relative grid h-10 w-10 place-items-center rounded-xl border border-black/10 bg-white text-emerald-deep transition hover:bg-cream-200"
+                aria-label="Open my orders"
+              >
+                <Package className="h-5 w-5" />
+              </button>
+            ) : null}
             {!empty ? (
               <button
                 onClick={newChat}
@@ -280,10 +442,15 @@ export default function Chat() {
       </header>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="log" aria-live="polite" aria-label="Conversation with Kapri">
         <div className="mx-auto max-w-3xl px-4 py-6">
           {empty ? (
-            <Hero onPick={send} />
+            <Hero
+              onPick={send}
+              avatarState={avatarState}
+              occasions={occasions}
+              onAddOccasion={(o) => setProfile((p) => addOccasion(p, o))}
+            />
           ) : (
             <div className="space-y-6">
               {messages.map((m, i) => (
@@ -293,10 +460,25 @@ export default function Chat() {
                   isLast={i === messages.length - 1}
                   streaming={streaming}
                   toolRunning={toolRunning}
+                  avatarState={avatarState}
                   onAdd={addProductToCart}
+                  onAddMany={addManyToCart}
                   onPrompt={send}
                 />
               ))}
+              {chips.length > 0 && !streaming ? (
+                <div className="flex flex-wrap gap-2 pl-11 animate-fade-up">
+                  {chips.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => send(c)}
+                      className="rounded-full border border-emerald-deep/15 bg-white px-3.5 py-1.5 text-sm font-medium text-emerald-deep shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-deep/40 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-deep/40"
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -333,6 +515,8 @@ export default function Chat() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         items={cart}
+        budget={profile.budget ?? null}
+        onClearBudget={() => setProfile((p) => ({ ...p, budget: null }))}
         onQty={(id, delta) =>
           setCart((prev) =>
             prev
@@ -341,9 +525,24 @@ export default function Chat() {
           )
         }
         onRemove={(id) => setCart((prev) => prev.filter((c) => c.product_id !== id))}
+        onIcing={setIcing}
         onCheckout={() => {
           setDrawerOpen(false);
           send("I'd like to checkout the items in my cart");
+        }}
+      />
+
+      <OrdersPanel
+        open={ordersOpen}
+        onClose={() => setOrdersOpen(false)}
+        orders={profile.orders}
+        onTrack={(ref) => {
+          setOrdersOpen(false);
+          send(`Track my order ${ref}`);
+        }}
+        onReorder={(ref) => {
+          setOrdersOpen(false);
+          send(`I'd like to order the same items as order ${ref} again`);
         }}
       />
     </div>
@@ -352,36 +551,48 @@ export default function Chat() {
 
 /* ---------- sub-views ---------- */
 
-function Avatar() {
-  return (
-    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-emerald-deep to-emerald-ink text-cream-50 shadow-sm">
-      <span className="font-display text-sm leading-none">ක</span>
-    </div>
-  );
-}
-
 function MessageRow({
   message,
   isLast,
   streaming,
   toolRunning,
+  avatarState,
   onAdd,
+  onAddMany,
   onPrompt,
 }: {
   message: ChatMessage;
   isLast: boolean;
   streaming: boolean;
   toolRunning: string | null;
-  onAdd: (p: Product) => void;
+  avatarState: AvatarState;
+  onAdd: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
+  onAddMany: (items: BundleItem[]) => void;
   onPrompt: (t: string) => void;
 }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
+    const images = message.parts.filter((p) => p.kind === "image") as Extract<MessagePart, { kind: "image" }>[];
     return (
-      <div className="flex justify-end animate-fade-up">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-emerald-deep px-4 py-2.5 text-[15px] leading-relaxed text-cream-50 shadow-card">
-          <span className="whitespace-pre-wrap">{text}</span>
-        </div>
+      <div className="flex flex-col items-end gap-1.5 animate-fade-up">
+        {images.length > 0 ? (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {images.map((p, i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={i}
+                src={p.url}
+                alt="Attached photo"
+                className="h-28 w-28 rounded-2xl rounded-br-md object-cover shadow-card"
+              />
+            ))}
+          </div>
+        ) : null}
+        {text ? (
+          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-emerald-deep px-4 py-2.5 text-[15px] leading-relaxed text-cream-50 shadow-card">
+            <span className="whitespace-pre-wrap">{text}</span>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -389,7 +600,7 @@ function MessageRow({
   const showThinking = isLast && streaming && message.parts.length === 0;
   return (
     <div className="flex gap-3 animate-fade-up">
-      <Avatar />
+      <KapriAvatar state={isLast ? avatarState : "idle"} size={32} />
       <div className="min-w-0 flex-1 space-y-2.5">
         {message.parts.map((part, i) =>
           part.kind === "text" ? (
@@ -401,11 +612,11 @@ function MessageRow({
                 <RichText text={part.text} />
               </div>
             ) : null
-          ) : (
+          ) : part.kind === "card" ? (
             <div key={i}>
-              <CardRenderer card={part.card} onAdd={onAdd} onPrompt={onPrompt} />
+              <CardRenderer card={part.card} onAdd={onAdd} onAddMany={onAddMany} onPrompt={onPrompt} />
             </div>
-          )
+          ) : null
         )}
         {(showThinking || (isLast && toolRunning)) && <Thinking tool={toolRunning} />}
       </div>
@@ -424,6 +635,9 @@ const TOOL_LABELS: Record<string, string> = {
   view_cart: "Opening your cart",
   create_order: "Creating your order",
   track_order: "Tracking your order",
+  propose_bundle: "Curating a gift bundle",
+  compare_products: "Comparing your options",
+  remember: "Making a note",
 };
 
 function Thinking({ tool }: { tool: string | null }) {
@@ -445,12 +659,20 @@ function Thinking({ tool }: { tool: string | null }) {
   );
 }
 
-function Hero({ onPick }: { onPick: (t: string) => void }) {
+function Hero({
+  onPick,
+  avatarState,
+  occasions,
+  onAddOccasion,
+}: {
+  onPick: (t: string) => void;
+  avatarState: AvatarState;
+  occasions: { label: string; date: string; inDays: number; recipientName?: string; emoji?: string }[];
+  onAddOccasion: (o: Omit<import("@/lib/types").ProfileOccasion, "id">) => void;
+}) {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-      <div className="mb-5 grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-emerald-deep to-emerald-ink text-cream-50 shadow-float">
-        <span className="font-display text-3xl leading-none">ක</span>
-      </div>
+      <KapriAvatar state={avatarState} size={64} className="mb-5 shadow-float" />
       <h1 className="font-display text-3xl font-semibold text-emerald-ink sm:text-4xl">
         Ayubowan 🙏 I'm Kapri
       </h1>
@@ -458,12 +680,13 @@ function Hero({ onPick }: { onPick: (t: string) => void }) {
         Sri Lanka's warmest way to shop &amp; gift. Tell me who it's for and the occasion — I'll find
         something lovely and take you all the way to checkout. English, Tanglish, හෝ සිංහලෙන්.
       </p>
+      <OccasionStrip occasions={occasions} onPick={onPick} onAdd={onAddOccasion} />
       <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
         {SUGGESTIONS.map((s) => (
           <button
             key={s}
             onClick={() => onPick(s)}
-            className="rounded-full border border-emerald-deep/15 bg-white px-4 py-2 text-sm font-medium text-emerald-deep shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-deep/40 hover:shadow-card"
+            className="rounded-full border border-emerald-deep/15 bg-white px-4 py-2 text-sm font-medium text-emerald-deep shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-deep/40 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-deep/40"
           >
             {s}
           </button>

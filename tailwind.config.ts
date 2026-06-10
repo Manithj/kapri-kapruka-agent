@@ -54,6 +54,10 @@ const config: Config = {
           "0%": { opacity: "0", transform: "translateY(14px) scale(0.96)" },
           "100%": { opacity: "1", transform: "translateY(0) scale(1)" },
         },
+        blink: {
+          "0%, 92%, 100%": { transform: "scaleY(1)" },
+          "96%": { transform: "scaleY(0.1)" },
+        },
       },
       animation: {
         "fade-up": "fade-up 0.4s ease-out both",
@@ -61,6 +65,7 @@ const config: Config = {
         "bounce-sm": "bounce-sm 1.2s ease-in-out infinite",
         pop: "pop 0.45s ease-out",
         "toast-in": "toast-in 0.3s ease-out both",
+        blink: "blink 4s ease-in-out infinite",
       },
     },
   },

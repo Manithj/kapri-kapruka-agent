@@ -1,21 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   Clock,
   ExternalLink,
+  Gift,
   MapPin,
   Package,
   PackageCheck,
   Plus,
+  Scale,
   ShoppingBag,
   Sparkles,
   Truck,
   X,
 } from "lucide-react";
-import { formatMoney, cartTotal } from "@/lib/format";
-import type { Product, UICard } from "@/lib/types";
+import { formatMoney, cartTotal, isCake } from "@/lib/format";
+import IcingPreview from "./IcingPreview";
+import Confetti from "./Confetti";
+import type { BundleItem, Product, UICard } from "@/lib/types";
 
 /* ---------- shared bits ---------- */
 
@@ -59,7 +63,8 @@ function StockBadge({ inStock, level }: { inStock?: boolean; level?: string }) {
 }
 
 interface CardActions {
-  onAdd?: (p: Product) => void;
+  onAdd?: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
+  onAddMany?: (items: BundleItem[]) => void;
   onPrompt?: (text: string) => void;
 }
 
@@ -148,23 +153,30 @@ function ProductsCard({
 
 /* ---------- product detail ---------- */
 
-function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?: (p: Product) => void }) {
+function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?: CardActions["onAdd"] }) {
   const p = data.product;
   const [active, setActive] = useState(0);
+  const [icing, setIcing] = useState("");
+  const cake = isCake(p);
   const imgs = p.images && p.images.length ? p.images : p.image_url ? [p.image_url] : [];
   return (
     <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
       <div className="grid gap-4 p-4 sm:grid-cols-[200px_1fr]">
         <div className="space-y-2">
-          <div className="aspect-square overflow-hidden rounded-xl bg-cream-200">
-            <Img src={imgs[active]} alt={p.name} className="h-full w-full object-cover" />
-          </div>
+          {cake && icing.trim() ? (
+            <IcingPreview image={imgs[active]} text={icing} className="aspect-square" />
+          ) : (
+            <div className="aspect-square overflow-hidden rounded-xl bg-cream-200">
+              <Img src={imgs[active]} alt={p.name} className="h-full w-full object-cover" />
+            </div>
+          )}
           {imgs.length > 1 ? (
             <div className="flex gap-1.5">
               {imgs.slice(0, 5).map((u, i) => (
                 <button
                   key={i}
                   onClick={() => setActive(i)}
+                  aria-label={`View image ${i + 1}`}
                   className={`h-10 w-10 overflow-hidden rounded-lg border ${
                     i === active ? "border-emerald-deep" : "border-black/5"
                   }`}
@@ -188,9 +200,20 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
               {p.description.replace(/\s+/g, " ").trim()}
             </p>
           ) : null}
+          {cake ? (
+            <label className="mt-3 flex flex-col gap-1">
+              <span className="text-xs font-medium text-ink/60">✍️ Icing message (preview updates live)</span>
+              <input
+                value={icing}
+                onChange={(e) => setIcing(e.target.value.slice(0, 40))}
+                placeholder="Happy Birthday Amma! · සුබ උපන්දිනයක්"
+                className="w-full rounded-xl border border-black/10 bg-cream-50 px-3 py-2 text-sm outline-none transition focus:border-emerald-deep/50 focus:bg-white"
+              />
+            </label>
+          ) : null}
           <div className="mt-auto flex flex-wrap gap-2 pt-3">
             <button
-              onClick={() => onAdd?.(p)}
+              onClick={() => onAdd?.(p, 1, cake && icing.trim() ? { icing_text: icing.trim() } : undefined)}
               disabled={p.in_stock === false}
               className="flex items-center gap-1.5 rounded-xl bg-emerald-deep px-4 py-2 text-sm font-medium text-cream-50 transition hover:bg-emerald-ink disabled:opacity-40"
             >
@@ -358,10 +381,39 @@ function CartCard({
 
 /* ---------- order confirmation ---------- */
 
+function PayCountdown({ expiresAt }: { expiresAt?: string }) {
+  const [target] = useState(() => {
+    const t = expiresAt ? Date.parse(expiresAt) : NaN;
+    return Number.isFinite(t) ? t : Date.now() + 60 * 60 * 1000;
+  });
+  const [remaining, setRemaining] = useState(() => target - Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setRemaining(target - Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [target]);
+
+  if (remaining <= 0) {
+    return (
+      <p className="mt-2 text-center text-xs font-medium text-clay">
+        Pay link expired — ask Kapri to re-create the order.
+      </p>
+    );
+  }
+  const mins = Math.floor(remaining / 60000);
+  const secs = Math.floor((remaining % 60000) / 1000);
+  const urgent = remaining < 10 * 60 * 1000;
+  return (
+    <p className={`mt-2 text-center text-xs ${urgent ? "font-semibold text-clay" : "text-ink/50"}`}>
+      Secure Kapruka guest checkout · link expires in {mins}:{secs.toString().padStart(2, "0")}
+    </p>
+  );
+}
+
 function OrderCard({ data }: { data: Extract<UICard, { component: "order" }>["data"] }) {
   const s = data.summary;
   return (
-    <div className="animate-fade-up overflow-hidden rounded-2xl border border-gold/40 bg-white shadow-float">
+    <div className="relative animate-fade-up overflow-hidden rounded-2xl border border-gold/40 bg-white shadow-float">
+      <Confetti />
       <div className="bg-gradient-to-r from-emerald-deep to-emerald-ink px-5 py-4 text-cream-50">
         <div className="flex items-center gap-2">
           <PackageCheck className="h-5 w-5 text-gold-soft" />
@@ -408,9 +460,7 @@ function OrderCard({ data }: { data: Extract<UICard, { component: "order" }>["da
         >
           Pay now <ExternalLink className="h-4 w-4" />
         </a>
-        <p className="mt-2 text-center text-xs text-ink/50">
-          Secure Kapruka guest checkout · link expires in ~60 minutes
-        </p>
+        <PayCountdown expiresAt={data.expires_at} />
       </div>
     </div>
   );
@@ -603,9 +653,148 @@ function CheckoutFormCard({
   );
 }
 
+/* ---------- gift bundle ---------- */
+
+function BundleCard({
+  data,
+  onAddMany,
+  onPrompt,
+}: {
+  data: Extract<UICard, { component: "bundle" }>["data"];
+  onAddMany?: CardActions["onAddMany"];
+  onPrompt?: (t: string) => void;
+}) {
+  const { items, total, currency, budget, title, occasion } = data;
+  const [added, setAdded] = useState(false);
+  const pct = budget ? Math.min(100, Math.round((total / budget) * 100)) : 0;
+  const over = budget ? total > budget : false;
+  const barColor = over ? "bg-clay" : pct > 80 ? "bg-gold" : "bg-emerald-deep";
+
+  return (
+    <div className="animate-fade-up overflow-hidden rounded-2xl border border-gold/40 bg-white shadow-card">
+      <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-deep to-emerald-ink px-4 py-3 text-cream-50">
+        <Gift className="h-5 w-5 text-gold-soft" />
+        <div>
+          <p className="font-display text-base font-semibold leading-tight">{title}</p>
+          {occasion ? <p className="text-xs text-cream-50/75">{occasion}</p> : null}
+        </div>
+      </div>
+      <div className="divide-y divide-black/5">
+        {items.map((it) => (
+          <div key={it.product.id} className="flex items-center gap-3 p-3">
+            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-cream-200">
+              <Img src={it.product.image_url} alt={it.product.name} className="h-full w-full object-cover" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-1 text-sm font-medium">
+                {it.quantity > 1 ? `${it.quantity}× ` : ""}
+                {it.product.name}
+              </p>
+              {it.reason ? <p className="line-clamp-1 text-xs text-ink/50">{it.reason}</p> : null}
+            </div>
+            <div className="flex flex-col items-end gap-0.5">
+              <span className="text-sm font-semibold text-emerald-deep">
+                {formatMoney((it.product.price.amount ?? 0) * it.quantity, it.product.price.currency)}
+              </span>
+              {onPrompt ? (
+                <button
+                  onClick={() => onPrompt(`Suggest an alternative to "${it.product.name}" in the bundle`)}
+                  className="text-[11px] text-ink/45 underline-offset-2 hover:text-emerald-deep hover:underline"
+                >
+                  Swap
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-2 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-ink/60">Bundle total</span>
+          <span className="font-display text-lg font-semibold text-emerald-deep">{formatMoney(total, currency)}</span>
+        </div>
+        {budget ? (
+          <div>
+            <div className="h-2 overflow-hidden rounded-full bg-cream-200">
+              <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${over ? 100 : pct}%` }} />
+            </div>
+            <p className={`mt-1 text-xs ${over ? "font-medium text-clay" : "text-ink/50"}`}>
+              {over
+                ? `${formatMoney(total - budget, currency)} over your ${formatMoney(budget, currency)} budget`
+                : `${formatMoney(budget - total, currency)} left of your ${formatMoney(budget, currency)} budget`}
+            </p>
+          </div>
+        ) : null}
+      </div>
+      <div className="px-4 pb-4">
+        <button
+          onClick={() => {
+            onAddMany?.(items);
+            setAdded(true);
+            setTimeout(() => setAdded(false), 1500);
+          }}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+            added ? "bg-emerald-deep text-cream-50" : "bg-gold text-emerald-ink hover:brightness-105"
+          }`}
+        >
+          {added ? (
+            <>
+              <Check className="h-4 w-4 animate-pop" /> Added to cart
+            </>
+          ) : (
+            <>
+              <Gift className="h-4 w-4" /> Add all to cart
+            </>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- product comparison ---------- */
+
+function CompareCard({ data, onAdd }: { data: { products: Product[] }; onAdd?: CardActions["onAdd"] }) {
+  const products = data.products.slice(0, 4);
+  return (
+    <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
+      <div className="flex items-center gap-2 bg-emerald-soft px-4 py-2.5 text-sm font-semibold text-emerald-deep">
+        <Scale className="h-4 w-4 text-gold" /> Comparing {products.length} options
+      </div>
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${products.length}, minmax(0, 1fr))` }}>
+        {products.map((p) => (
+          <div key={p.id} className="flex flex-col gap-2 border-l border-black/5 p-3 first:border-l-0">
+            <div className="aspect-square overflow-hidden rounded-lg bg-cream-200">
+              <Img src={p.image_url} alt={p.name} className="h-full w-full object-cover" />
+            </div>
+            <p className="line-clamp-2 text-xs font-medium leading-snug text-ink">{p.name}</p>
+            <div className="flex flex-wrap items-baseline gap-1">
+              <span className="text-sm font-semibold text-emerald-deep">{formatMoney(p.price.amount, p.price.currency)}</span>
+              {p.compare_at_price?.amount && p.price.amount && p.compare_at_price.amount > p.price.amount ? (
+                <span className="text-[11px] text-ink/40 line-through">
+                  {formatMoney(p.compare_at_price.amount, p.compare_at_price.currency)}
+                </span>
+              ) : null}
+            </div>
+            <StockBadge inStock={p.in_stock} level={p.stock_level} />
+            {p.category?.name ? <p className="text-[11px] capitalize text-ink/45">{p.category.name}</p> : null}
+            <button
+              onClick={() => onAdd?.(p)}
+              disabled={p.in_stock === false}
+              className="mt-auto flex items-center justify-center gap-1 rounded-lg bg-emerald-deep px-2 py-1.5 text-xs font-medium text-cream-50 transition hover:bg-emerald-ink disabled:opacity-40"
+            >
+              <Plus className="h-3.5 w-3.5" /> Add
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- renderer ---------- */
 
-export function CardRenderer({ card, onAdd, onPrompt }: { card: UICard } & CardActions) {
+export function CardRenderer({ card, onAdd, onAddMany, onPrompt }: { card: UICard } & CardActions) {
   switch (card.component) {
     case "products":
       return <ProductsCard data={card.data} onAdd={onAdd} />;
@@ -623,10 +812,15 @@ export function CardRenderer({ card, onAdd, onPrompt }: { card: UICard } & CardA
       return <OrderCard data={card.data} />;
     case "tracking":
       return <TrackingCard data={card.data} />;
+    case "bundle":
+      return <BundleCard data={card.data} onAddMany={onAddMany} onPrompt={onPrompt} />;
+    case "compare":
+      return <CompareCard data={card.data} onAdd={onAdd} />;
     case "checkout_form":
       return <CheckoutFormCard data={card.data} onSubmit={onPrompt} />;
     case "cart_op":
-      // cart_op mutates the live cart drawer; nothing inline to render.
+    case "profile_op":
+      // mutate live state; nothing inline to render.
       return null;
     default:
       return null;

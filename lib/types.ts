@@ -83,6 +83,21 @@ export interface OrderTracking {
   has_delivery_photo?: boolean;
 }
 
+export interface BundleItem {
+  product: Product;
+  quantity: number;
+  reason?: string;
+}
+
+export interface BundleData {
+  title: string;
+  occasion?: string;
+  budget?: number | null;
+  currency: string;
+  items: BundleItem[];
+  total: number;
+}
+
 // ---- Generative-UI card payloads streamed from the server ----
 export type UICard =
   | { component: "products"; data: { title?: string; products: Product[] } }
@@ -94,6 +109,9 @@ export type UICard =
   | { component: "cart_op"; data: { op: "add" | "remove" | "set"; items: CartItem[] } }
   | { component: "order"; data: OrderConfirmation }
   | { component: "tracking"; data: OrderTracking }
+  | { component: "bundle"; data: BundleData }
+  | { component: "compare"; data: { products: Product[] } }
+  | { component: "profile_op"; data: ProfileOp }
   | {
       component: "checkout_form";
       data: { prefill?: { city?: string; date?: string; recipient_name?: string } };
@@ -104,13 +122,15 @@ export type StreamEvent =
   | { type: "text"; value: string }
   | { type: "tool"; tool: string; status: "running" }
   | { type: "ui"; card: UICard }
+  | { type: "chips"; values: string[] }
   | { type: "done" }
   | { type: "error"; value: string };
 
 // A rendered assistant message is an ordered list of parts.
 export type MessagePart =
   | { kind: "text"; text: string }
-  | { kind: "card"; card: UICard };
+  | { kind: "card"; card: UICard }
+  | { kind: "image"; url: string };
 
 export interface ChatMessage {
   id: string;
@@ -122,4 +142,63 @@ export interface ChatMessage {
 export interface WireMessage {
   role: "user" | "assistant";
   content: string;
+  // Data-URL images attached to a user message (only the latest turn carries bytes).
+  images?: string[];
+}
+
+// ---- Client-side profile (localStorage; flows up to the server as WireProfile) ----
+export interface ProfileRecipient {
+  id: string;
+  name: string;
+  relationship?: string;
+  city?: string;
+  notes?: string;
+}
+
+export interface ProfileOccasion {
+  id: string;
+  label: string;
+  date: string; // YYYY-MM-DD (recurring: month/day are what matter)
+  recurring: boolean;
+  type: "birthday" | "anniversary" | "custom";
+  recipientName?: string;
+}
+
+export interface ProfileOrder {
+  order_ref: string;
+  placedAt: string;
+  total: number;
+  currency: string;
+  recipient?: string;
+  city?: string;
+  items: { name: string; quantity: number }[];
+}
+
+export interface KapriProfile {
+  v: 1;
+  language?: "en" | "si" | "tanglish";
+  defaultCity?: string;
+  budget?: { amount: number; currency: string } | null;
+  recipients: ProfileRecipient[];
+  occasions: ProfileOccasion[];
+  orders: ProfileOrder[];
+}
+
+// A profile_op card is intercepted client-side (like cart_op) to mutate the profile.
+export type ProfileOp =
+  | { op: "remember_recipient"; name: string; relationship?: string; city?: string; notes?: string }
+  | { op: "add_occasion"; label: string; date: string; recurring?: boolean; occasionType?: "birthday" | "anniversary" | "custom"; recipientName?: string }
+  | { op: "set_budget"; amount: number; currency?: string }
+  | { op: "clear_budget" }
+  | { op: "set_language"; language: "en" | "si" | "tanglish" }
+  | { op: "set_city"; city: string };
+
+// Compact, client-computed summary sent up each request in the POST body.
+export interface WireProfile {
+  language?: "en" | "si" | "tanglish";
+  defaultCity?: string;
+  budget?: { amount: number; currency: string } | null;
+  recipients?: { name: string; relationship?: string; city?: string; notes?: string }[];
+  upcoming?: { label: string; date: string; inDays: number; recipientName?: string }[];
+  recentOrders?: { order_ref: string; recipient?: string; city?: string }[];
 }

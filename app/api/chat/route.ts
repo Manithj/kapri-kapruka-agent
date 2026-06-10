@@ -1,22 +1,73 @@
 import OpenAI from "openai";
 import type { NextRequest } from "next/server";
 import { TOOLS, executeTool, type AgentContext } from "@/lib/agent";
-import { buildSystemPrompt, buildContextMessage } from "@/lib/prompt";
-import type { CartItem, StreamEvent, WireMessage } from "@/lib/types";
+import { buildSystemPrompt, buildContextMessage, buildChipContext } from "@/lib/prompt";
+import type { CartItem, StreamEvent, WireMessage, WireProfile } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+const CHIP_MODEL = process.env.OPENAI_CHIP_MODEL || "gpt-4o-mini";
 const MAX_TURNS = 8;
 
 function todayInColombo(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Colombo" }).format(new Date());
 }
 
+// Map a wire message to an OpenAI message, attaching images as multimodal parts
+// (user messages only). Only the latest user turn carries image bytes.
+function toOpenAIMessage(m: WireMessage): OpenAI.Chat.Completions.ChatCompletionMessageParam {
+  if (m.role === "user" && m.images && m.images.length) {
+    return {
+      role: "user",
+      content: [
+        { type: "text", text: m.content },
+        ...m.images.map((url) => ({ type: "image_url" as const, image_url: { url, detail: "auto" as const } })),
+      ],
+    };
+  }
+  return { role: m.role, content: m.content } as OpenAI.Chat.Completions.ChatCompletionMessageParam;
+}
+
+// Cheap, non-streamed follow-up: 2–3 tappable quick replies in the user's language.
+async function generateChips(
+  client: OpenAI,
+  userText: string,
+  assistantText: string,
+  cart: CartItem[],
+  profile?: WireProfile
+): Promise<string[]> {
+  if (!assistantText && !userText) return [];
+  const completion = await client.chat.completions.create({
+    model: CHIP_MODEL,
+    max_tokens: 90,
+    temperature: 0.7,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You generate quick-reply chips for a Sri Lankan shopping assistant. Given the last exchange, return JSON {\"chips\": string[]} with 2-3 SHORT (<=6 words) replies the shopper would plausibly tap next to keep shopping or move toward checkout. Write them in the SAME language/script the user used (English, Sinhala, or Tanglish). No numbering, no quotes inside. If nothing useful, return {\"chips\":[]}.",
+      },
+      {
+        role: "user",
+        content: `Context: ${buildChipContext(cart, profile)}\nUser said: ${userText}\nKapri replied: ${assistantText.slice(0, 600)}`,
+      },
+    ],
+  });
+  const raw = completion.choices[0]?.message?.content || "{}";
+  const parsed = JSON.parse(raw);
+  const chips = Array.isArray(parsed?.chips) ? parsed.chips : [];
+  return chips
+    .filter((c: unknown): c is string => typeof c === "string" && c.trim().length > 0)
+    .slice(0, 3)
+    .map((c: string) => c.trim().slice(0, 60));
+}
+
 export async function POST(req: NextRequest) {
-  let body: { messages?: WireMessage[]; cart?: CartItem[]; currency?: string };
+  let body: { messages?: WireMessage[]; cart?: CartItem[]; currency?: string; profile?: WireProfile };
   try {
     body = await req.json();
   } catch {
@@ -24,6 +75,7 @@ export async function POST(req: NextRequest) {
   }
   const history = (body.messages || []).slice(-24);
   const currency = body.currency || "LKR";
+  const profile = body.profile;
   const ctx: AgentContext = {
     cart: Array.isArray(body.cart) ? structuredClone(body.cart) : [],
     currency,
@@ -31,11 +83,12 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder();
   const today = todayInColombo();
+  const lastUser = [...history].reverse().find((m) => m.role === "user");
 
   const oaMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt() },
-    { role: "system", content: buildContextMessage(ctx.cart, today) },
-    ...history.map((m) => ({ role: m.role, content: m.content }) as OpenAI.Chat.Completions.ChatCompletionMessageParam),
+    { role: "system", content: buildContextMessage(ctx.cart, today, profile) },
+    ...history.map(toOpenAIMessage),
   ];
 
   const stream = new ReadableStream<Uint8Array>({
@@ -56,6 +109,7 @@ export async function POST(req: NextRequest) {
       }
 
       const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      let finalText = "";
 
       try {
         for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -69,6 +123,7 @@ export async function POST(req: NextRequest) {
 
           let content = "";
           const toolCalls: { id: string; name: string; args: string }[] = [];
+          finalText = "";
 
           for await (const chunk of completion) {
             const choice = chunk.choices[0];
@@ -90,7 +145,10 @@ export async function POST(req: NextRequest) {
           }
 
           const calls = toolCalls.filter((t) => t.name);
-          if (calls.length === 0) break; // model produced a final answer
+          if (calls.length === 0) {
+            finalText = content; // model produced a final answer
+            break;
+          }
 
           oaMessages.push({
             role: "assistant",
@@ -121,7 +179,15 @@ export async function POST(req: NextRequest) {
           }
 
           // refresh the live-context system message with the updated cart
-          oaMessages[1] = { role: "system", content: buildContextMessage(ctx.cart, today) };
+          oaMessages[1] = { role: "system", content: buildContextMessage(ctx.cart, today, profile) };
+        }
+
+        // Suggestion chips: one cheap, best-effort call. Never block the reply.
+        try {
+          const chips = await generateChips(client, lastUser?.content || "", finalText, ctx.cart, profile);
+          if (chips.length) send({ type: "chips", values: chips });
+        } catch {
+          /* chips are optional — ignore failures */
         }
 
         send({ type: "done" });
