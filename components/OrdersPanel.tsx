@@ -67,7 +67,7 @@ export default function OrdersPanel({
               <div className="grid h-16 w-16 place-items-center rounded-full bg-emerald-soft">
                 <PackageCheck className="h-7 w-7 text-emerald-deep/50" />
               </div>
-              <p className="text-sm">No orders yet. Once you place one with Kapri, it'll show up here.</p>
+              <p className="text-sm">No orders yet. Once you place one with Kamala, it'll show up here.</p>
             </div>
           ) : (
             <ul className="space-y-2.5">

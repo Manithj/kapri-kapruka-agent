@@ -12,15 +12,24 @@ const config: Config = {
           100: "#FBF7F0",
           200: "#F3EADB",
         },
+        // Note: these "emerald" keys are kept as the app's primary-color tokens
+        // but now carry Kapruka's purple ramp (purple + gold brand). Renaming the
+        // ~90 usages would be churn; redefining the values flips the whole UI.
         emerald: {
-          ink: "#0B3D32",
-          deep: "#0E5B4A",
-          mid: "#15786160",
-          soft: "#E7F0EC",
+          ink: "#3D1A6E",
+          deep: "#5B2D8E",
+          mid: "#7B4BB060",
+          soft: "#EDE0F8",
         },
         gold: {
-          DEFAULT: "#C9A24B",
-          soft: "#EAD9A8",
+          DEFAULT: "#E6B325",
+          soft: "#F7E6B0",
+          deep: "#A9791B",
+        },
+        kapruka: {
+          purple: "#5B2D8E",
+          dark: "#3D1A6E",
+          soft: "#EDE0F8",
         },
         ink: "#1E2A28",
         clay: "#C45B3C",

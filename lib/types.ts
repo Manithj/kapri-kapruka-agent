@@ -19,6 +19,32 @@ export interface Product {
   category?: { id?: string; name?: string; slug?: string };
   ships_internationally?: boolean;
   url?: string;
+  variants?: ProductVariant[];
+  attributes?: ProductAttributes;
+  shipping?: ProductShipping;
+}
+
+export interface ProductVariant {
+  id: string;
+  name: string;
+  sku?: string;
+  price: Money;
+  in_stock?: boolean;
+  stock_level?: string;
+  attributes?: { weight?: string } & Record<string, string>;
+}
+
+export interface ProductAttributes {
+  type?: string;
+  subtype?: string;
+  weight?: string;
+  vendor?: string;
+}
+
+export interface ProductShipping {
+  ships_from?: string;
+  ships_internationally?: boolean;
+  restricted_countries?: string[];
 }
 
 export interface CartItem {
@@ -100,7 +126,10 @@ export interface BundleData {
 
 // ---- Generative-UI card payloads streamed from the server ----
 export type UICard =
-  | { component: "products"; data: { title?: string; products: Product[] } }
+  | {
+      component: "products";
+      data: { title?: string; products: Product[]; query?: string; nextCursor?: string; maxPrice?: number; minPrice?: number };
+    }
   | { component: "product"; data: { product: Product } }
   | { component: "categories"; data: { categories: Category[] } }
   | { component: "cities"; data: { query?: string; cities: City[] } }
@@ -136,6 +165,9 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   parts: MessagePart[];
+  // For user messages whose visible bubble differs from what the model should
+  // receive (e.g. a "Load more" button that carries a hidden cursor instruction).
+  wireText?: string;
 }
 
 // Wire format the client sends to /api/chat for the model's history.

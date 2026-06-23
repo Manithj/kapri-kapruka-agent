@@ -1,19 +1,63 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Apple,
+  Baby,
+  Bike,
+  BookOpen,
+  Briefcase,
+  Cake,
+  CakeSlice,
+  Camera,
+  Candy,
+  Car,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock,
+  Coffee,
+  Cookie,
+  Crown,
+  Dumbbell,
   ExternalLink,
+  Flower2,
+  Gamepad2,
+  Gem,
   Gift,
+  GraduationCap,
+  Grid3x3,
+  HandHeart,
+  Heart,
+  HeartHandshake,
+  Home,
+  Laptop,
+  Leaf,
   MapPin,
+  Milk,
   Package,
   PackageCheck,
+  PartyPopper,
+  PawPrint,
   Plus,
+  Ribbon,
   Scale,
+  Search,
+  Shirt,
   ShoppingBag,
+  Smartphone,
+  Smile,
+  Snowflake,
   Sparkles,
+  Sprout,
+  Star,
+  Tag,
   Truck,
+  User,
+  Users,
+  Utensils,
+  Watch,
+  Wine,
   X,
 } from "lucide-react";
 import { formatMoney, cartTotal, isCake } from "@/lib/format";
@@ -46,6 +90,7 @@ function Img({
       src={src}
       alt={alt}
       loading="lazy"
+      draggable={false}
       onError={() => setBroken(true)}
       className={className}
     />
@@ -65,12 +110,93 @@ function StockBadge({ inStock, level }: { inStock?: boolean; level?: string }) {
 interface CardActions {
   onAdd?: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
   onAddMany?: (items: BundleItem[]) => void;
-  onPrompt?: (text: string) => void;
+  // wireText (optional) is sent to the model in place of the visible bubble text.
+  onPrompt?: (text: string, wireText?: string) => void;
+}
+
+/* Click-and-drag ("grab") horizontal scrolling for the product carousel on
+   desktop — touch devices already swipe natively. While dragging we disable
+   scroll-snap and text selection so the motion is smooth, and we swallow the
+   click that follows a real drag so it doesn't trigger a card button. */
+function useDragScroll() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let down = false;
+    let startX = 0;
+    let startScroll = 0;
+    let dragged = false;
+
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse" || e.button !== 0) return; // left mouse only
+      down = true;
+      dragged = false;
+      startX = e.clientX;
+      startScroll = el.scrollLeft;
+      // NOTE: do NOT capture the pointer here — that would steal the click from
+      // child buttons (Details / +). We only capture once a real drag begins.
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!down) return;
+      const dx = e.clientX - startX;
+      if (!dragged && Math.abs(dx) > 4) {
+        dragged = true;
+        el.setPointerCapture(e.pointerId); // capture only now that we're dragging
+        el.style.userSelect = "none";
+        el.style.cursor = "grabbing";
+        el.style.scrollSnapType = "none";
+      }
+      if (dragged) {
+        e.preventDefault();
+        el.scrollLeft = startScroll - dx;
+      }
+    };
+    const endDrag = (e: PointerEvent) => {
+      if (!down) return;
+      down = false;
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {}
+      el.style.userSelect = "";
+      el.style.cursor = "";
+      el.style.scrollSnapType = "";
+      // suppress the click that fires right after a real drag, then reset
+      if (dragged) {
+        const swallow = (ev: MouseEvent) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+        };
+        el.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => el.removeEventListener("click", swallow, true), 0);
+      }
+    };
+
+    el.addEventListener("pointerdown", onDown);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", endDrag);
+    el.addEventListener("pointercancel", endDrag);
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", endDrag);
+      el.removeEventListener("pointercancel", endDrag);
+    };
+  }, []);
+  return ref;
 }
 
 /* ---------- product card (used in carousel) ---------- */
 
-function ProductCard({ p, onAdd }: { p: Product; onAdd?: (p: Product) => void }) {
+function ProductCard({
+  p,
+  onAdd,
+  onPrompt,
+}: {
+  p: Product;
+  onAdd?: (p: Product) => void;
+  onPrompt?: (t: string) => void;
+}) {
   const discounted = p.compare_at_price?.amount && p.price.amount && p.compare_at_price.amount > p.price.amount;
   const [added, setAdded] = useState(false);
   const handleAdd = () => {
@@ -104,23 +230,24 @@ function ProductCard({ p, onAdd }: { p: Product; onAdd?: (p: Product) => void })
         <div className="pt-0.5">
           <StockBadge inStock={p.in_stock} level={p.stock_level} />
         </div>
-        <button
-          onClick={handleAdd}
-          disabled={p.in_stock === false}
-          className={`mt-2 flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
-            added ? "bg-gold text-emerald-ink" : "bg-emerald-deep text-cream-50 hover:bg-emerald-ink"
-          }`}
-        >
-          {added ? (
-            <>
-              <Check className="h-4 w-4 animate-pop" /> Added
-            </>
-          ) : (
-            <>
-              <Plus className="h-4 w-4" /> Add
-            </>
-          )}
-        </button>
+        <div className="mt-2 flex gap-2">
+          <button
+            onClick={() => onPrompt?.(`Show me details for ${p.name}`)}
+            className="flex flex-1 items-center justify-center gap-1 rounded-xl border border-black/10 bg-white px-2 py-2 text-sm font-medium text-ink/70 transition hover:bg-cream-200"
+          >
+            Details <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={p.in_stock === false}
+            aria-label={`Add ${p.name} to cart`}
+            className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-emerald-ink transition disabled:cursor-not-allowed disabled:opacity-40 ${
+              added ? "bg-gold" : "bg-gold hover:brightness-110"
+            }`}
+          >
+            {added ? <Check className="h-4 w-4 animate-pop" /> : <Plus className="h-5 w-5" />}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -129,29 +256,125 @@ function ProductCard({ p, onAdd }: { p: Product; onAdd?: (p: Product) => void })
 function ProductsCard({
   data,
   onAdd,
+  onPrompt,
 }: {
-  data: { title?: string; products: Product[] };
+  data: { title?: string; products: Product[]; query?: string; nextCursor?: string; maxPrice?: number; minPrice?: number };
   onAdd?: (p: Product) => void;
+  onPrompt?: (t: string, wireText?: string) => void;
 }) {
+  const swipeable = data.products.length > 2;
+  const dragRef = useDragScroll();
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(false);
+
+  const updateArrows = () => {
+    const el = dragRef.current;
+    if (!el) return;
+    setAtStart(el.scrollLeft <= 2);
+    setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
+  };
+  useEffect(() => {
+    updateArrows();
+    const el = dragRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", updateArrows, { passive: true });
+    window.addEventListener("resize", updateArrows);
+    return () => {
+      el.removeEventListener("scroll", updateArrows);
+      window.removeEventListener("resize", updateArrows);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.products.length]);
+
+  const scrollByCards = (dir: 1 | -1) => {
+    const el = dragRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(220, el.clientWidth * 0.8), behavior: "smooth" });
+  };
+
   return (
     <div className="animate-fade-up">
-      {data.title ? (
-        <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-emerald-deep">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-sm font-medium text-emerald-deep">
           <Sparkles className="h-4 w-4 text-gold" />
-          <span className="capitalize">{data.title}</span>
+          <span className="capitalize">{data.title ?? "Picks for you"}</span>
           <span className="text-ink/40">· {data.products.length} picks</span>
         </div>
-      ) : null}
-      <div className="snap-x-cards -mx-1 flex gap-3 overflow-x-auto px-1 pb-2">
-        {data.products.map((p) => (
-          <ProductCard key={p.id} p={p} onAdd={onAdd} />
-        ))}
+        {swipeable ? (
+          <span className="flex items-center gap-0.5 text-[11px] font-medium text-ink/35">
+            Swipe <ChevronRight className="h-3.5 w-3.5" />
+          </span>
+        ) : null}
       </div>
+      <div className="relative">
+        {swipeable ? (
+          <>
+            <button
+              onClick={() => scrollByCards(-1)}
+              disabled={atStart}
+              aria-label="Previous products"
+              className="absolute left-0 top-1/2 z-10 hidden h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-emerald-deep text-white shadow-float ring-2 ring-white transition hover:bg-emerald-ink disabled:pointer-events-none disabled:opacity-0 md:grid"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => scrollByCards(1)}
+              disabled={atEnd}
+              aria-label="Next products"
+              className="absolute right-0 top-1/2 z-10 hidden h-10 w-10 translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-emerald-deep text-white shadow-float ring-2 ring-white transition hover:bg-emerald-ink disabled:pointer-events-none disabled:opacity-0 md:grid"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
+          </>
+        ) : null}
+        <div
+          ref={dragRef}
+          className="snap-x-cards -mx-1 flex gap-3 overflow-x-auto px-1 pb-2 md:cursor-grab md:active:cursor-grabbing"
+        >
+          {data.products.map((p) => (
+            <ProductCard key={p.id} p={p} onAdd={onAdd} onPrompt={onPrompt} />
+          ))}
+        </div>
+      </div>
+      {onPrompt && data.nextCursor && data.query ? (
+        <div className="mt-1 text-center">
+          <button
+            onClick={() =>
+              onPrompt(
+                "Show me more",
+                `Load more "${data.query}" — call search_products with q:"${data.query}"${
+                  data.maxPrice != null ? ` max_price:${data.maxPrice}` : ""
+                }${data.minPrice != null ? ` min_price:${data.minPrice}` : ""} cursor:"${data.nextCursor}" and show the next page.`
+              )
+            }
+            className="rounded-full border border-emerald-deep/20 bg-white px-5 py-2 text-sm font-medium text-emerald-deep shadow-sm transition hover:bg-emerald-soft"
+          >
+            Load more products
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 /* ---------- product detail ---------- */
+
+// The MCP reports weight as "0" for items with no real weight set — treat those
+// (and blank values) as "no weight" so we don't show a meaningless "Weight: 0".
+function hasWeight(w?: string | number | null): w is string | number {
+  if (w == null) return false;
+  const s = String(w).trim();
+  return s !== "" && parseFloat(s) > 0;
+}
+
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-1.5">
+      <span className="text-sm text-ink/50">{label}</span>
+      <span className="text-right text-sm text-ink/90">{value}</span>
+    </div>
+  );
+}
 
 function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?: CardActions["onAdd"] }) {
   const p = data.product;
@@ -159,77 +382,177 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
   const [icing, setIcing] = useState("");
   const cake = isCake(p);
   const imgs = p.images && p.images.length ? p.images : p.image_url ? [p.image_url] : [];
+  const attrs = p.attributes;
+  const hasDetails = attrs && (attrs.type || attrs.subtype || hasWeight(attrs.weight) || attrs.vendor);
+  const name = p.name.replace(/\s+/g, " ").trim();
+
   return (
     <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
-      <div className="grid gap-4 p-4 sm:grid-cols-[200px_1fr]">
-        <div className="space-y-2">
-          {cake && icing.trim() ? (
-            <IcingPreview image={imgs[active]} text={icing} className="aspect-square" />
-          ) : (
-            <div className="aspect-square overflow-hidden rounded-xl bg-cream-200">
-              <Img src={imgs[active]} alt={p.name} className="h-full w-full object-cover" />
-            </div>
-          )}
-          {imgs.length > 1 ? (
-            <div className="flex gap-1.5">
-              {imgs.slice(0, 5).map((u, i) => (
+      {/* gallery — full width */}
+      <div className="p-3">
+        {cake && icing.trim() ? (
+          <IcingPreview image={imgs[active]} text={icing} className="aspect-[4/3] w-full rounded-xl" />
+        ) : (
+          <div className="relative aspect-[4/3] w-full overflow-hidden rounded-xl bg-cream-200">
+            <Img src={imgs[active]} alt={name} className="h-full w-full object-cover" />
+            {imgs.length > 1 ? (
+              <>
                 <button
-                  key={i}
-                  onClick={() => setActive(i)}
-                  aria-label={`View image ${i + 1}`}
-                  className={`h-10 w-10 overflow-hidden rounded-lg border ${
-                    i === active ? "border-emerald-deep" : "border-black/5"
-                  }`}
+                  onClick={() => setActive((a) => Math.max(0, a - 1))}
+                  disabled={active === 0}
+                  aria-label="Previous image"
+                  className="absolute left-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white/80 text-ink shadow transition disabled:opacity-30"
                 >
-                  <Img src={u} alt="" className="h-full w-full object-cover" />
+                  <ChevronLeft className="h-4 w-4" />
                 </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-        <div className="flex flex-col">
-          <h3 className="font-display text-lg font-semibold leading-tight text-ink">{p.name}</h3>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="font-display text-xl font-semibold text-emerald-deep">
-              {formatMoney(p.price.amount, p.price.currency)}
-            </span>
-            <StockBadge inStock={p.in_stock} level={p.stock_level} />
-          </div>
-          {p.description ? (
-            <p className="mt-2 line-clamp-4 text-sm leading-relaxed text-ink/70">
-              {p.description.replace(/\s+/g, " ").trim()}
-            </p>
-          ) : null}
-          {cake ? (
-            <label className="mt-3 flex flex-col gap-1">
-              <span className="text-xs font-medium text-ink/60">✍️ Icing message (preview updates live)</span>
-              <input
-                value={icing}
-                onChange={(e) => setIcing(e.target.value.slice(0, 40))}
-                placeholder="Happy Birthday Amma! · සුබ උපන්දිනයක්"
-                className="w-full rounded-xl border border-black/10 bg-cream-50 px-3 py-2 text-sm outline-none transition focus:border-emerald-deep/50 focus:bg-white"
-              />
-            </label>
-          ) : null}
-          <div className="mt-auto flex flex-wrap gap-2 pt-3">
-            <button
-              onClick={() => onAdd?.(p, 1, cake && icing.trim() ? { icing_text: icing.trim() } : undefined)}
-              disabled={p.in_stock === false}
-              className="flex items-center gap-1.5 rounded-xl bg-emerald-deep px-4 py-2 text-sm font-medium text-cream-50 transition hover:bg-emerald-ink disabled:opacity-40"
-            >
-              <ShoppingBag className="h-4 w-4" /> Add to cart
-            </button>
-            {p.url ? (
-              <a
-                href={p.url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 rounded-xl border border-black/10 px-4 py-2 text-sm font-medium text-ink/70 transition hover:bg-cream-200"
-              >
-                View on Kapruka <ExternalLink className="h-3.5 w-3.5" />
-              </a>
+                <button
+                  onClick={() => setActive((a) => Math.min(imgs.length - 1, a + 1))}
+                  disabled={active === imgs.length - 1}
+                  aria-label="Next image"
+                  className="absolute right-2 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full bg-white/80 text-ink shadow transition disabled:opacity-30"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <span className="absolute bottom-2 right-2 rounded-full bg-black/50 px-2 py-0.5 text-[11px] font-medium text-white">
+                  {active + 1} / {imgs.length}
+                </span>
+              </>
             ) : null}
           </div>
+        )}
+        {imgs.length > 1 ? (
+          <div className="mt-2 flex gap-2">
+            {imgs.slice(0, 5).map((u, i) => (
+              <button
+                key={i}
+                onClick={() => setActive(i)}
+                aria-label={`View image ${i + 1}`}
+                className={`h-14 w-14 overflow-hidden rounded-lg border-2 transition ${
+                  i === active ? "border-kapruka-purple" : "border-black/5"
+                }`}
+              >
+                <Img src={u} alt="" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="px-4 pb-4">
+        {/* category + stock */}
+        <div className="flex items-center gap-2">
+          {p.category?.name ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-ink/45">{p.category.name}</span>
+          ) : null}
+          <StockBadge inStock={p.in_stock} level={p.stock_level} />
+        </div>
+
+        {/* name + id */}
+        <h3 className="mt-1 font-display text-xl font-semibold leading-tight text-kapruka-purple">{name}</h3>
+        <p className="mt-0.5 font-mono text-[11px] text-ink/35">{p.id.toLowerCase()}</p>
+
+        {/* price */}
+        <p className="mt-2 font-display text-2xl font-semibold text-ink">
+          {formatMoney(p.price.amount, p.price.currency)}
+        </p>
+
+        {/* description */}
+        {p.description ? (
+          <p className="mt-2 text-sm leading-relaxed text-ink/70">{p.description.replace(/\s+/g, " ").trim()}</p>
+        ) : null}
+
+        {/* variants */}
+        {p.variants && p.variants.length ? (
+          <div className="mt-4">
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink/45">Variants</p>
+            <div className="space-y-2">
+              {p.variants.map((v) => (
+                <div key={v.id} className="rounded-xl border border-black/10 px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink">{v.name}</p>
+                      {v.sku ? <p className="font-mono text-[11px] text-ink/40">{v.sku}</p> : null}
+                      {hasWeight(v.attributes?.weight) ? (
+                        <p className="text-xs text-ink/55">Weight: {v.attributes!.weight}</p>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-semibold text-ink">{formatMoney(v.price.amount, v.price.currency)}</p>
+                      {v.stock_level === "low" ? (
+                        <p className="text-[11px] font-medium text-[#9a7a2c]">Low stock</p>
+                      ) : v.in_stock === false ? (
+                        <p className="text-[11px] font-medium text-clay">Out of stock</p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* details */}
+        {hasDetails ? (
+          <div className="mt-4">
+            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink/45">Details</p>
+            <div className="divide-y divide-black/5">
+              {attrs?.type ? <DetailRow label="Type" value={attrs.type} /> : null}
+              {attrs?.subtype ? <DetailRow label="Subtype" value={attrs.subtype} /> : null}
+              {hasWeight(attrs?.weight) ? <DetailRow label="Weight" value={attrs!.weight} /> : null}
+              {attrs?.vendor ? <DetailRow label="Vendor" value={attrs.vendor} /> : null}
+            </div>
+          </div>
+        ) : null}
+
+        {/* shipping */}
+        {p.shipping && (p.shipping.ships_from || p.shipping.ships_internationally != null) ? (
+          <div className="mt-4 rounded-xl border border-black/10 p-3">
+            <div className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-ink">
+              <Truck className="h-4 w-4 text-kapruka-purple" /> Shipping
+            </div>
+            {p.shipping.ships_from ? (
+              <p className="text-sm text-ink/70">Ships from {p.shipping.ships_from}</p>
+            ) : null}
+            {p.shipping.ships_internationally != null ? (
+              <p className="text-sm text-ink/70">
+                {p.shipping.ships_internationally ? "International delivery available" : "Delivery within Sri Lanka only"}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* icing for cakes */}
+        {cake ? (
+          <label className="mt-4 flex flex-col gap-1">
+            <span className="text-xs font-medium text-ink/60">✍️ Icing message (preview updates live)</span>
+            <input
+              value={icing}
+              onChange={(e) => setIcing(e.target.value.slice(0, 40))}
+              placeholder="Happy Birthday Amma! · සුබ උපන්දිනයක්"
+              className="w-full rounded-xl border border-black/10 bg-cream-50 px-3 py-2 text-sm outline-none transition focus:border-kapruka-purple/50 focus:bg-white"
+            />
+          </label>
+        ) : null}
+
+        {/* actions */}
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={() => onAdd?.(p, 1, cake && icing.trim() ? { icing_text: icing.trim() } : undefined)}
+            disabled={p.in_stock === false}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-kapruka-purple px-4 py-2.5 text-sm font-semibold text-cream-50 transition hover:bg-kapruka-dark disabled:opacity-40"
+          >
+            <ShoppingBag className="h-4 w-4" /> Add to Basket
+          </button>
+          {p.url ? (
+            <a
+              href={p.url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-black/15 px-4 py-2.5 text-sm font-semibold text-ink/80 transition hover:bg-cream-200"
+            >
+              View on Kapruka <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          ) : null}
         </div>
       </div>
     </div>
@@ -238,21 +561,162 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
 
 /* ---------- categories ---------- */
 
-function CategoriesCard({ data, onPrompt }: { data: { categories: { name: string }[] }; onPrompt?: (t: string) => void }) {
+// Best-effort icon for a category name (keyword match). Ordered most-specific
+// first so e.g. "GreetingCards" hits cards before generic matches.
+function categoryIcon(name: string) {
+  const n = name.toLowerCase().replace(/[^a-z]/g, "");
+  const rules: [RegExp, typeof Tag][] = [
+    // occasions & seasonal
+    [/valentine|lover|youandme|romance/, Heart],
+    [/wedding|bridetobe|marriage/, Ribbon],
+    [/anniversary/, HandHeart],
+    [/birthday/, Cake],
+    [/christmas|newyear|diwali|halloween|party|pongal|pongle|avurudu|poya|festival/, PartyPopper],
+    [/sympath|funeral|condolen/, Flower2],
+    [/mother|momtobe|momtobe/, Smile],
+    [/father/, User],
+    [/women|girl/, User],
+    [/teacher/, GraduationCap],
+    [/graduation|schoolpride/, GraduationCap],
+    [/children|childrens|kids|kid|softtoy|toy|baby/, Baby],
+    [/corporate|office|business/, Briefcase],
+    // product departments
+    [/flower|bouquet|rose/, Flower2],
+    [/cakeslice|pastry|bakery|dessert/, CakeSlice],
+    [/cake/, Cake],
+    [/chocolate/, Cookie],
+    [/candy|sweet|confection/, Candy],
+    [/curd|dairy|milk/, Milk],
+    [/coffee|tea|beverage/, Coffee],
+    [/fruit/, Apple],
+    [/vegetable/, Sprout],
+    [/grocery|food/, Utensils],
+    [/liquor|wine|spirit|adultproduct/, Wine],
+    [/perfume|cosmetic|fragrance|beauty/, Sparkles],
+    [/ayurved|herbal|pirikara|spa/, Leaf],
+    [/pharmac|health|medic|wellness/, Heart],
+    [/automobile|car|motor|vehicle/, Car],
+    [/bicycle|bike|cycle/, Bike],
+    [/phone|mobile|smart/, Smartphone],
+    [/electronic|computer|laptop|gadget|tech/, Laptop],
+    [/camera|photo/, Camera],
+    [/game|gaming/, Gamepad2],
+    [/watch|clock/, Watch],
+    [/jewel|ornament|gem|ring|gold/, Gem],
+    [/perfume/, Sparkles],
+    [/clothing|fashion|apparel|wear|dress/, Shirt],
+    [/book|stationer/, BookOpen],
+    [/greetingcard|card/, Gift],
+    [/sport|fitness|gym/, Dumbbell],
+    [/pet|animal/, PawPrint],
+    [/household|home|furnitur|decor|garden/, Home],
+    [/personalized|uniquegift|giftset|giftcert|combopack|hamper|gift/, Gift],
+    [/bestseller|newaddition|promotion|popular/, Star],
+    [/sameday|delivery|service/, Truck],
+    [/crown|premium|luxury/, Crown],
+    [/uniquegift/, PartyPopper],
+    [/people|group|family/, Users],
+    [/snow|winter/, Snowflake],
+    [/care|kind/, HeartHandshake],
+  ];
+  for (const [re, Icon] of rules) if (re.test(n)) return Icon;
+  return Tag;
+}
+
+// Most shopper-relevant gifting categories float to the top; everything else
+// keeps the API's original order behind them.
+const POPULAR_CATEGORY_ORDER = [
+  /cake/,
+  /flower/,
+  /chocolate/,
+  /birthday/,
+  /anniversary/,
+  /wedding/,
+  /valentine/,
+  /personalized|uniquegift/,
+  /perfume/,
+  /jewel/,
+  /electronic/,
+  /clothing|fashion/,
+  /grocery/,
+  /bestseller/,
+];
+
+function popularRank(name: string): number {
+  const n = name.toLowerCase().replace(/[^a-z]/g, "");
+  const i = POPULAR_CATEGORY_ORDER.findIndex((re) => re.test(n));
+  return i === -1 ? POPULAR_CATEGORY_ORDER.length : i;
+}
+
+function CategoriesCard({
+  data,
+  onPrompt,
+}: {
+  data: { categories: { name: string; url?: string }[] };
+  onPrompt?: (t: string) => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const filtered = data.categories
+    .filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()))
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => popularRank(a.c.name) - popularRank(b.c.name) || a.i - b.i)
+    .map((x) => x.c);
+  const showFilter = data.categories.length > 8;
   return (
-    <div className="animate-fade-up rounded-2xl border border-black/5 bg-white p-4 shadow-card">
-      <p className="mb-2 text-sm font-medium text-emerald-deep">Browse by category</p>
-      <div className="flex flex-wrap gap-2">
-        {data.categories.map((c) => (
-          <button
-            key={c.name}
-            onClick={() => onPrompt?.(`Show me some ${c.name.toLowerCase()}`)}
-            className="rounded-full border border-emerald-deep/15 bg-emerald-soft/60 px-3 py-1.5 text-sm font-medium capitalize text-emerald-deep transition hover:bg-emerald-deep hover:text-cream-50"
-          >
-            {c.name}
-          </button>
-        ))}
+    <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
+      <div className="flex items-center gap-2 border-b border-black/5 px-4 py-3">
+        <Grid3x3 className="h-4 w-4 text-emerald-deep" />
+        <div>
+          <p className="text-sm font-semibold text-emerald-deep">Shop by category</p>
+          <p className="text-[11px] text-ink/50">{data.categories.length} departments on Kapruka</p>
+        </div>
       </div>
+      {showFilter ? (
+        <div className="px-3 pt-3">
+          <div className="flex items-center gap-2 rounded-xl border border-black/10 px-3 py-2">
+            <Search className="h-4 w-4 shrink-0 text-ink/40" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter categories…"
+              className="flex-1 bg-transparent text-sm outline-none"
+            />
+          </div>
+        </div>
+      ) : null}
+      {filtered.length === 0 ? (
+        <p className="px-4 py-6 text-center text-sm text-ink/40">No categories match “{filter}”.</p>
+      ) : (
+        <div className="grid max-h-80 grid-cols-2 gap-2.5 overflow-y-auto p-3 sm:grid-cols-3">
+          {filtered.map((c) => {
+            const Icon = categoryIcon(c.name);
+            return (
+              <button
+                key={c.name}
+                onClick={() => onPrompt?.(`Show me some ${c.name.toLowerCase()}`)}
+                className="group relative flex flex-col items-center gap-2 rounded-2xl border border-black/[0.07] bg-cream-50 px-3 py-4 text-center transition hover:-translate-y-0.5 hover:border-emerald-deep/30 hover:bg-white hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-deep/40"
+              >
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-emerald-soft text-emerald-deep transition group-hover:bg-emerald-deep group-hover:text-cream-50">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <span className="line-clamp-2 text-sm font-medium capitalize leading-tight text-ink">{c.name}</span>
+                {c.url ? (
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`Open ${c.name} on Kapruka`}
+                    className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-lg text-ink/30 opacity-0 transition hover:bg-cream-200 hover:text-ink group-hover:opacity-100"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -370,7 +834,7 @@ function CartCard({
       <div className="px-4 pb-4">
         <button
           onClick={() => onPrompt?.("I'd like to checkout")}
-          className="w-full rounded-xl bg-gold px-4 py-2.5 text-sm font-semibold text-emerald-ink transition hover:brightness-105"
+          className="w-full rounded-xl bg-kapruka-purple px-4 py-2.5 text-sm font-semibold text-cream-50 transition hover:bg-kapruka-dark"
         >
           Proceed to checkout →
         </button>
@@ -395,7 +859,7 @@ function PayCountdown({ expiresAt }: { expiresAt?: string }) {
   if (remaining <= 0) {
     return (
       <p className="mt-2 text-center text-xs font-medium text-clay">
-        Pay link expired — ask Kapri to re-create the order.
+        Pay link expired — ask Kamala to re-create the order.
       </p>
     );
   }
@@ -579,7 +1043,7 @@ function CheckoutFormCard({
   if (submitted) {
     return (
       <div className="animate-fade-up flex items-center gap-2 rounded-2xl border border-emerald-deep/20 bg-emerald-soft px-4 py-3 text-sm font-medium text-emerald-deep">
-        <Check className="h-4 w-4" /> Details submitted — Kapri is placing your order…
+        <Check className="h-4 w-4" /> Details submitted — Kamala is placing your order…
       </div>
     );
   }
@@ -797,7 +1261,7 @@ function CompareCard({ data, onAdd }: { data: { products: Product[] }; onAdd?: C
 export function CardRenderer({ card, onAdd, onAddMany, onPrompt }: { card: UICard } & CardActions) {
   switch (card.component) {
     case "products":
-      return <ProductsCard data={card.data} onAdd={onAdd} />;
+      return <ProductsCard data={card.data} onAdd={onAdd} onPrompt={onPrompt} />;
     case "product":
       return <ProductDetailCard data={card.data} onAdd={onAdd} />;
     case "categories":
