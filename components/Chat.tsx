@@ -1,7 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Package, ShoppingBag, Sparkles, SquarePen } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Gift,
+  Flower2,
+  Package,
+  RotateCcw,
+  Search,
+  ShoppingBag,
+  Sparkles,
+  Truck,
+} from "lucide-react";
 import Composer from "./Composer";
 import CartDrawer from "./CartDrawer";
 import OrdersPanel from "./OrdersPanel";
@@ -15,7 +26,6 @@ import {
   saveProfile,
   applyProfileOp,
   logOrder,
-  addOccasion,
   upcomingOccasions,
   profileToWire,
 } from "@/lib/profile";
@@ -31,12 +41,12 @@ import type {
   WireMessage,
 } from "@/lib/types";
 
-const SUGGESTIONS = [
-  "🎂 Birthday gift under Rs 5,000",
-  "🌹 Red roses to Colombo",
-  "📱 Looking for a Samsung phone",
-  "🎁 Surprise gift for my amma",
-  "සිංහලෙන් කතා කරමු",
+const SUGGESTIONS: { icon: React.ReactNode; label: string; text: string }[] = [
+  { icon: <Gift className="h-4 w-4" />, label: "Birthday gift under Rs 5,000", text: "🎂 Birthday gift under Rs 5,000" },
+  { icon: <Flower2 className="h-4 w-4" />, label: "Red roses to Colombo", text: "🌹 Red roses to Colombo" },
+  { icon: <Search className="h-4 w-4" />, label: "Browse shopping categories", text: "Show me Kapruka's shopping categories" },
+  { icon: <Sparkles className="h-4 w-4" />, label: "Surprise gift for my amma", text: "🎁 Surprise gift for my amma" },
+  { icon: <Truck className="h-4 w-4" />, label: "Chat in Sinhala", text: "සිංහලෙන් කතා කරමු" },
 ];
 
 let idSeq = 0;
@@ -50,9 +60,14 @@ function noteForCard(card: UICard): string | null {
       return (
         "Products shown — " +
         card.data.products
-          .slice(0, 12)
+          .slice(0, 15)
           .map((p) => `${p.name} (id:${p.id}, ${p.price.currency} ${p.price.amount ?? "?"})`)
-          .join("; ")
+          .join("; ") +
+        (card.data.nextCursor
+          ? ` [To load MORE, call search_products with q:"${card.data.query ?? ""}"${
+              card.data.maxPrice != null ? ` max_price:${card.data.maxPrice}` : ""
+            }${card.data.minPrice != null ? ` min_price:${card.data.minPrice}` : ""} cursor:"${card.data.nextCursor}".]`
+          : " [No further pages for this query.]")
       );
     case "product": {
       const p = card.data.product;
@@ -106,7 +121,8 @@ function toWire(msgs: ChatMessage[]): WireMessage[] {
         idx === lastUserIdx
           ? (m.parts.filter((p) => p.kind === "image") as Extract<MessagePart, { kind: "image" }>[]).map((p) => p.url)
           : [];
-      const content = text || (images.length ? "(see attached photo)" : "(empty)");
+      // wireText (if set) is what the model receives; the visible bubble may differ.
+      const content = m.wireText ?? text ?? (images.length ? "(see attached photo)" : "(empty)");
       return images.length ? { role: "user", content, images } : { role: "user", content };
     }
     const notes = m.parts
@@ -256,13 +272,13 @@ export default function Chat() {
   }, []);
 
   const send = useCallback(
-    async (text: string, images?: string[]) => {
+    async (text: string, images?: string[], opts?: { wireText?: string }) => {
       if (streaming) return;
       const userParts: MessagePart[] = [];
       if (text) userParts.push({ kind: "text", text });
       for (const url of images || []) userParts.push({ kind: "image", url });
-      if (userParts.length === 0) return;
-      const userMsg: ChatMessage = { id: nextId(), role: "user", parts: userParts };
+      if (userParts.length === 0 && !opts?.wireText) return;
+      const userMsg: ChatMessage = { id: nextId(), role: "user", parts: userParts, wireText: opts?.wireText };
       const assistantId = nextId();
       const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", parts: [] };
 
@@ -312,7 +328,7 @@ export default function Chat() {
               }
             } else if (ev.card.component === "profile_op") {
               setProfile((p) => applyProfileOp(p, (ev.card as Extract<UICard, { component: "profile_op" }>).data));
-              showToast("Kapri will remember that ✨");
+              showToast("Kamala will remember that ✨");
             } else {
               setToolRunning(null);
               if (ev.card.component === "products" || ev.card.component === "bundle") {
@@ -365,7 +381,7 @@ export default function Chat() {
       } catch (e: any) {
         appendToAssistant(assistantId, (parts) => [
           ...parts,
-          { kind: "text", text: `⚠️ Aiyo, something went wrong reaching Kapri. ${e?.message || ""}`.trim() },
+          { kind: "text", text: `⚠️ Aiyo, something went wrong reaching Kamala. ${e?.message || ""}`.trim() },
         ]);
       } finally {
         setStreaming(false);
@@ -378,7 +394,7 @@ export default function Chat() {
   const count = cartCount(cart);
   const empty = messages.length === 0;
   const today = new Date().toISOString().slice(0, 10);
-  const occasions = useMemo(() => upcomingOccasions(profile, today, 30), [profile, today]);
+  const occasions = useMemo(() => upcomingOccasions(profile, today, 60), [profile, today]);
 
   const avatarState: AvatarState = celebrate
     ? "celebrating"
@@ -391,40 +407,39 @@ export default function Chat() {
     : "idle";
 
   return (
-    <div className="flex h-[100dvh] flex-col">
+    <div className="relative flex h-[100dvh] flex-col">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-black/5 bg-cream-50/80 backdrop-blur-md">
+      <header className="sticky top-0 z-30 bg-kapruka-purple shadow-sm">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
           <button onClick={newChat} className="flex items-center gap-2.5 text-left" aria-label="Go to home">
             <KapriAvatar state={avatarState} size={36} className="shadow" />
             <div className="leading-tight">
-              <p className="font-display text-lg font-semibold text-emerald-ink">Kapri</p>
-              <p className="text-[11px] text-ink/45">Your Kapruka gift concierge 🇱🇰</p>
+              <p className="font-display text-lg font-semibold text-white">
+                Kamala <span className="font-sans text-sm font-normal text-white/55">by Kapruka</span>
+              </p>
+              <p className="text-[11px] text-white/60">Your gift concierge 🇱🇰</p>
             </div>
           </button>
           <div className="flex items-center gap-2">
             {profile.orders.length > 0 ? (
               <button
                 onClick={() => setOrdersOpen(true)}
-                className="relative grid h-10 w-10 place-items-center rounded-xl border border-black/10 bg-white text-emerald-deep transition hover:bg-cream-200"
+                className="relative grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
                 aria-label="Open my orders"
               >
                 <Package className="h-5 w-5" />
               </button>
             ) : null}
-            {!empty ? (
-              <button
-                onClick={newChat}
-                className="flex h-10 items-center gap-1.5 rounded-xl border border-black/10 bg-white px-3 text-sm font-medium text-emerald-deep transition hover:bg-cream-200"
-                aria-label="Start a new chat"
-              >
-                <SquarePen className="h-4 w-4" />
-                <span className="hidden sm:inline">New</span>
-              </button>
-            ) : null}
+            <button
+              onClick={newChat}
+              className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+              aria-label="Start a new chat"
+            >
+              <RotateCcw className="h-5 w-5" />
+            </button>
             <button
               onClick={() => setDrawerOpen(true)}
-              className="relative grid h-10 w-10 place-items-center rounded-xl border border-black/10 bg-white text-emerald-deep transition hover:bg-cream-200"
+              className="relative grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
               aria-label="Open cart"
             >
               <ShoppingBag className="h-5 w-5" />
@@ -442,15 +457,10 @@ export default function Chat() {
       </header>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="log" aria-live="polite" aria-label="Conversation with Kapri">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto" role="log" aria-live="polite" aria-label="Conversation with Kamala">
         <div className="mx-auto max-w-3xl px-4 py-6">
           {empty ? (
-            <Hero
-              onPick={send}
-              avatarState={avatarState}
-              occasions={occasions}
-              onAddOccasion={(o) => setProfile((p) => addOccasion(p, o))}
-            />
+            <Hero onPick={send} avatarState={avatarState} occasions={occasions} />
           ) : (
             <div className="space-y-6">
               {messages.map((m, i) => (
@@ -463,7 +473,7 @@ export default function Chat() {
                   avatarState={avatarState}
                   onAdd={addProductToCart}
                   onAddMany={addManyToCart}
-                  onPrompt={send}
+                  onPrompt={(t, wireText) => send(t, undefined, wireText ? { wireText } : undefined)}
                 />
               ))}
               {chips.length > 0 && !streaming ? (
@@ -484,12 +494,15 @@ export default function Chat() {
         </div>
       </div>
 
+      {/* Scroll to bottom */}
+      {!empty ? <ScrollToBottomBtn scrollRef={scrollRef} /> : null}
+
       {/* Composer */}
       <div className="border-t border-black/5 bg-cream-50/80 backdrop-blur-md">
         <div className="mx-auto max-w-3xl px-4 py-3">
           <Composer onSend={send} disabled={streaming} />
           <p className="mt-1.5 text-center text-[11px] text-ink/40">
-            Kapri can make mistakes — confirm details before you pay. Powered by the Kapruka MCP.
+            Kamala can make mistakes — confirm details before you pay. Powered by the Kapruka MCP.
           </p>
         </div>
       </div>
@@ -526,6 +539,7 @@ export default function Chat() {
         }
         onRemove={(id) => setCart((prev) => prev.filter((c) => c.product_id !== id))}
         onIcing={setIcing}
+        onClearAll={() => setCart([])}
         onCheckout={() => {
           setDrawerOpen(false);
           send("I'd like to checkout the items in my cart");
@@ -568,7 +582,7 @@ function MessageRow({
   avatarState: AvatarState;
   onAdd: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
   onAddMany: (items: BundleItem[]) => void;
-  onPrompt: (t: string) => void;
+  onPrompt: (t: string, wireText?: string) => void;
 }) {
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.kind === "text" ? p.text : "")).join("");
@@ -589,7 +603,7 @@ function MessageRow({
           </div>
         ) : null}
         {text ? (
-          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-emerald-deep px-4 py-2.5 text-[15px] leading-relaxed text-cream-50 shadow-card">
+          <div className="max-w-[85%] rounded-2xl rounded-br-md bg-kapruka-purple px-4 py-2.5 text-[15px] leading-relaxed text-cream-50 shadow-card">
             <span className="whitespace-pre-wrap">{text}</span>
           </div>
         ) : null}
@@ -659,36 +673,62 @@ function Thinking({ tool }: { tool: string | null }) {
   );
 }
 
+function ScrollToBottomBtn({ scrollRef }: { scrollRef: React.RefObject<HTMLDivElement> }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const handler = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      setVisible(!atBottom);
+    };
+    handler();
+    el.addEventListener("scroll", handler, { passive: true });
+    return () => el.removeEventListener("scroll", handler);
+  }, [scrollRef]);
+
+  if (!visible) return null;
+  return (
+    <button
+      onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })}
+      aria-label="Scroll to latest"
+      className="absolute bottom-28 left-4 z-20 grid h-10 w-10 animate-fade-up place-items-center rounded-full bg-emerald-deep text-cream-50 shadow-float transition hover:bg-emerald-ink"
+    >
+      <ChevronDown className="h-5 w-5" />
+    </button>
+  );
+}
+
 function Hero({
   onPick,
   avatarState,
   occasions,
-  onAddOccasion,
 }: {
   onPick: (t: string) => void;
   avatarState: AvatarState;
   occasions: { label: string; date: string; inDays: number; recipientName?: string; emoji?: string }[];
-  onAddOccasion: (o: Omit<import("@/lib/types").ProfileOccasion, "id">) => void;
 }) {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
       <KapriAvatar state={avatarState} size={64} className="mb-5 shadow-float" />
+      <p className="mb-2 text-[11px] font-bold uppercase tracking-widest text-gold-deep">Welcome</p>
       <h1 className="font-display text-3xl font-semibold text-emerald-ink sm:text-4xl">
-        Ayubowan 🙏 I'm Kapri
+        Ayubowan 🙏 I&apos;m <span className="text-gold-deep">Kamala</span>
       </h1>
       <p className="mt-2 max-w-md text-[15px] leading-relaxed text-ink/60">
         Sri Lanka's warmest way to shop &amp; gift. Tell me who it's for and the occasion — I'll find
         something lovely and take you all the way to checkout. English, Tanglish, හෝ සිංහලෙන්.
       </p>
-      <OccasionStrip occasions={occasions} onPick={onPick} onAdd={onAddOccasion} />
+      <OccasionStrip occasions={occasions} onPick={onPick} />
       <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
         {SUGGESTIONS.map((s) => (
           <button
-            key={s}
-            onClick={() => onPick(s)}
-            className="rounded-full border border-emerald-deep/15 bg-white px-4 py-2 text-sm font-medium text-emerald-deep shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-deep/40 hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-deep/40"
+            key={s.text}
+            onClick={() => onPick(s.text)}
+            className="flex items-center gap-2 rounded-full border border-emerald-deep/15 bg-white px-4 py-2 text-sm font-medium text-emerald-deep shadow-sm transition hover:-translate-y-0.5 hover:border-gold hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-deep/40"
           >
-            {s}
+            <span className="text-gold-deep">{s.icon}</span>
+            {s.label}
           </button>
         ))}
       </div>

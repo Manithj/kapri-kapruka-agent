@@ -53,7 +53,7 @@ async function generateChips(
       },
       {
         role: "user",
-        content: `Context: ${buildChipContext(cart, profile)}\nUser said: ${userText}\nKapri replied: ${assistantText.slice(0, 600)}`,
+        content: `Context: ${buildChipContext(cart, profile)}\nUser said: ${userText}\nKamala replied: ${assistantText.slice(0, 600)}`,
       },
     ],
   });
@@ -76,14 +76,16 @@ export async function POST(req: NextRequest) {
   const history = (body.messages || []).slice(-24);
   const currency = body.currency || "LKR";
   const profile = body.profile;
+  const lastUser = [...history].reverse().find((m) => m.role === "user");
   const ctx: AgentContext = {
     cart: Array.isArray(body.cart) ? structuredClone(body.cart) : [],
     currency,
+    validatorModel: CHIP_MODEL,
+    intent: lastUser?.content,
   };
 
   const encoder = new TextEncoder();
   const today = todayInColombo();
-  const lastUser = [...history].reverse().find((m) => m.role === "user");
 
   const oaMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: buildSystemPrompt() },
@@ -101,7 +103,7 @@ export async function POST(req: NextRequest) {
         send({
           type: "error",
           value:
-            "Kapri isn't fully set up yet — the server is missing its OPENAI_API_KEY. Add it to the environment and reload.",
+            "Kamala isn't fully set up yet — the server is missing its OPENAI_API_KEY. Add it to the environment and reload.",
         });
         send({ type: "done" });
         controller.close();
@@ -109,6 +111,7 @@ export async function POST(req: NextRequest) {
       }
 
       const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      ctx.client = client; // enable the relevance-validation agent for searches
       let finalText = "";
 
       try {
@@ -192,7 +195,7 @@ export async function POST(req: NextRequest) {
 
         send({ type: "done" });
       } catch (e: any) {
-        send({ type: "error", value: e?.message || "Something went wrong while Kapri was thinking." });
+        send({ type: "error", value: e?.message || "Something went wrong while Kamala was thinking." });
         send({ type: "done" });
       } finally {
         controller.close();

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, X } from "lucide-react";
+import { ArrowUp, ImagePlus, Loader2, Mic, X } from "lucide-react";
 import { downscaleImage } from "@/lib/image";
 
 export default function Composer({
@@ -14,6 +14,8 @@ export default function Composer({
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -23,6 +25,26 @@ export default function Composer({
     el.style.height = "0px";
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [text]);
+
+  useEffect(() => {
+    setVoiceSupported("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+  }, []);
+
+  function startVoice() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const recog = new SR();
+    recog.lang = "en-LK";
+    recog.interimResults = false;
+    recog.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      setText((prev) => (prev ? prev + " " : "") + transcript);
+    };
+    recog.onend = () => setListening(false);
+    recog.onerror = () => setListening(false);
+    recog.start();
+    setListening(true);
+  }
 
   async function addFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((f) => f.type.startsWith("image/"));
@@ -88,6 +110,18 @@ export default function Composer({
         >
           {processing ? <Loader2 className="h-5 w-5 animate-spin" /> : <ImagePlus className="h-5 w-5" />}
         </button>
+        {voiceSupported ? (
+          <button
+            onClick={startVoice}
+            disabled={disabled || listening}
+            aria-label="Voice input"
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl transition disabled:cursor-not-allowed ${
+              listening ? "animate-pulse bg-clay/10 text-clay" : "text-emerald-deep hover:bg-cream-200 disabled:opacity-30"
+            }`}
+          >
+            <Mic className="h-5 w-5" />
+          </button>
+        ) : null}
         <textarea
           ref={ref}
           rows={1}
@@ -106,14 +140,14 @@ export default function Composer({
               submit();
             }
           }}
-          placeholder="Ask Kapri anything — or attach a photo of something you love…"
+          placeholder="Ask Kamala anything — or attach a photo of something you love…"
           className="max-h-40 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-relaxed outline-none placeholder:text-ink/35"
         />
         <button
           onClick={submit}
           disabled={disabled || processing || (!text.trim() && images.length === 0)}
           aria-label="Send"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-deep text-cream-50 transition hover:bg-emerald-ink disabled:cursor-not-allowed disabled:opacity-30"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gold text-emerald-ink transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-30"
         >
           <ArrowUp className="h-5 w-5" />
         </button>

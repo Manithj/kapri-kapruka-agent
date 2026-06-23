@@ -4,7 +4,7 @@ import { Search, Sparkles } from "lucide-react";
 
 export type AvatarState = "idle" | "thinking" | "searching" | "found" | "celebrating";
 
-// Kapri's little face — the ක monogram tile evolved into a character with
+// Kamala's little face — the ක monogram tile evolved into a character with
 // expression states tied to what the agent is doing. All motion is gated behind
 // motion-safe so reduced-motion users get a calm, static avatar.
 export default function KapriAvatar({
@@ -26,7 +26,7 @@ export default function KapriAvatar({
 
   return (
     <div
-      className={`relative grid shrink-0 place-items-center overflow-visible rounded-xl bg-gradient-to-br from-emerald-deep to-emerald-ink text-cream-50 ${bob} ${className}`}
+      className={`relative grid shrink-0 place-items-center overflow-visible rounded-xl bg-gradient-to-br from-emerald-deep to-emerald-ink text-cream-50 ring-1 ring-gold/40 ${bob} ${className}`}
       style={{ height: size, width: size, borderRadius: radius }}
       aria-hidden="true"
     >

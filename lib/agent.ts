@@ -22,7 +22,12 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "string",
             enum: ["relevance", "price_asc", "price_desc", "newest", "bestseller"],
           },
-          limit: { type: "integer", description: "How many results (1-12). Default 8." },
+          limit: { type: "integer", description: "How many results (1-15). Default 8." },
+          cursor: {
+            type: "string",
+            description:
+              "Pass the next_cursor value from a previous search of the SAME query to fetch the next page (use when the user asks to see more / load more). Omit for a fresh search.",
+          },
           currency: { type: "string", description: "LKR (default), USD, GBP, AUD, CAD, EUR." },
         },
         required: ["q"],
@@ -48,8 +53,17 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "list_categories",
-      description: "List top-level Kapruka product categories. Useful for guided browsing or when search comes up empty.",
-      parameters: { type: "object", properties: {} },
+      description:
+        "List top-level Kapruka product categories. Use it (a) to SHOW the user a browsable category grid when they explicitly ask to browse/see categories — set show=true; or (b) silently, to look up category names when a product search came up empty so you can search within a relevant category — set show=false (default). When show=false, no category card is shown to the user; you get the names back as text to act on.",
+      parameters: {
+        type: "object",
+        properties: {
+          show: {
+            type: "boolean",
+            description: "true ONLY when the user explicitly wants to browse categories. Default false.",
+          },
+        },
+      },
     },
   },
   {
@@ -241,7 +255,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "remember",
       description:
-        "Save a durable fact about the customer so Kapri recalls it next time: a recipient, an occasion (birthday/anniversary), their preferred language, usual city, or active budget. Call this naturally when the customer reveals such a fact — don't announce every save.",
+        "Save a durable fact about the customer so Kamala recalls it next time: a recipient, an occasion (birthday/anniversary), their preferred language, usual city, or active budget. Call this naturally when the customer reveals such a fact — don't announce every save.",
       parameters: {
         type: "object",
         properties: {
@@ -298,12 +312,63 @@ function mapDetailProduct(d: any): Product {
     image_url: images[0] ?? null,
     category: d.category,
     url: d.url,
+    variants: Array.isArray(d.variants) ? d.variants : undefined,
+    attributes: d.attributes,
+    shipping: d.shipping,
   };
 }
 
 export interface AgentContext {
   cart: CartItem[];
   currency: string;
+  // Optional relevance-validation hook: a cheap model + the user's latest intent.
+  // When present, search results are filtered to genuinely-matching items before
+  // they're rendered as a carousel (the MCP's keyword search returns loose junk).
+  client?: OpenAI;
+  validatorModel?: string;
+  intent?: string;
+}
+
+// Validation agent: filters MCP search results down to items that genuinely match
+// the shopper's intent, dropping loose mismatches (e.g. raw fruit/groceries for a
+// "birthday gift"). Fail-open: on any error or empty verdict, keep the originals.
+async function validateRelevance(
+  ctx: AgentContext,
+  query: string,
+  products: Product[]
+): Promise<Product[]> {
+  if (!ctx.client || products.length === 0) return products;
+  const list = products
+    .map((p) => `${p.id} | ${p.name} | ${p.category?.name ?? "?"} | ${p.price.currency} ${p.price.amount ?? "?"}`)
+    .join("\n");
+  try {
+    const completion = await ctx.client.chat.completions.create({
+      model: ctx.validatorModel || "gpt-4o-mini",
+      max_tokens: 400,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            'You are a relevance filter for a Sri Lankan gift-shopping assistant. Given the shopper\'s request and a list of products retrieved by a fuzzy keyword search, decide which products genuinely fit the request. DROP clear mismatches — e.g. loose fruit/vegetables or plain groceries when someone wants a "gift", or cakes when they asked for flower bouquets. KEEP anything a reasonable shopper would accept as matching. Keep the original order. Return JSON {"keep": ["id1","id2",...]} containing only the product IDs to keep. If essentially all fit, return them all. Never invent IDs.',
+        },
+        {
+          role: "user",
+          content: `Shopper's request: "${ctx.intent || query}"\nSearch query used: "${query}"\n\nProducts (id | name | category | price):\n${list}`,
+        },
+      ],
+    });
+    const raw = completion.choices[0]?.message?.content || "{}";
+    const keep = JSON.parse(raw)?.keep;
+    if (!Array.isArray(keep) || keep.length === 0) return products;
+    const keepSet = new Set(keep.map((x: unknown) => String(x)));
+    const filtered = products.filter((p) => keepSet.has(p.id));
+    // Fail-open if the filter nuked everything (likely a model hiccup).
+    return filtered.length ? filtered : products;
+  } catch {
+    return products;
+  }
 }
 
 export interface ExecResult {
@@ -367,7 +432,8 @@ export async function executeTool(
         max_price: args.max_price ?? null,
         in_stock_only: args.in_stock_only ?? false,
         sort: args.sort ?? "relevance",
-        limit: Math.min(12, args.limit ?? 8),
+        limit: Math.min(15, args.limit ?? 8),
+        cursor: args.cursor ?? null,
         currency: args.currency ?? ctx.currency,
       });
       if (!res.ok) {
@@ -376,17 +442,56 @@ export async function executeTool(
           cards: [],
         };
       }
-      const products: Product[] = (res.data.results || []).map(mapSearchProduct);
-      if (products.length === 0) {
+      let raw: Product[] = (res.data.results || []).map(mapSearchProduct);
+      if (raw.length === 0) {
         return { result: `No results for "${args.q}". Try a different query or browse categories.`, cards: [] };
       }
+      // Hard budget guard: never show items outside an explicit price range, even
+      // if the API/cursor pagination slips an out-of-range item through.
+      if (typeof args.max_price === "number") raw = raw.filter((p) => p.price.amount == null || p.price.amount <= args.max_price);
+      if (typeof args.min_price === "number") raw = raw.filter((p) => p.price.amount == null || p.price.amount >= args.min_price);
+      if (raw.length === 0) {
+        return {
+          result: `No results for "${args.q}" within that price range. Tell the user nothing fits the budget and suggest widening it or a different idea.`,
+          cards: [],
+        };
+      }
+      // Validation agent: drop loose mismatches before they reach the carousel.
+      const products = await validateRelevance(ctx, args.q, raw);
+      if (products.length === 0) {
+        return {
+          result: `Search for "${args.q}" only returned items that don't fit the request — reword the query (more specific product type) and search again.`,
+          cards: [],
+        };
+      }
+      const dropped = raw.length - products.length;
       const brief = products
-        .slice(0, 12)
+        .slice(0, 15)
         .map((p) => `${p.name} | id:${p.id} | ${p.price.currency} ${p.price.amount ?? "?"} | ${p.in_stock ? "in stock" : "out of stock"}`)
         .join("\n");
+      const nextCursor: string | undefined = res.data.next_cursor || undefined;
+      const filterReplay = `${typeof args.max_price === "number" ? ` max_price:${args.max_price}` : ""}${
+        typeof args.min_price === "number" ? ` min_price:${args.min_price}` : ""
+      }`;
+      const more = nextCursor
+        ? `\n\nMore results are available — to show the next page, call search_products again with the SAME q:"${args.q}"${filterReplay} and cursor:"${nextCursor}" (you MUST re-pass the price filters or the next page will ignore the budget).`
+        : `\n\nNo more results for this query.`;
+      const note = dropped > 0 ? ` (${dropped} off-topic item${dropped === 1 ? "" : "s"} filtered out)` : "";
       return {
-        result: `Found ${products.length} products for "${args.q}" (shown to the user as cards):\n${brief}`,
-        cards: [{ component: "products", data: { title: args.q, products } }],
+        result: `Found ${products.length} relevant products for "${args.q}"${note} (shown to the user as cards):\n${brief}${more}`,
+        cards: [
+          {
+            component: "products",
+            data: {
+              title: args.q,
+              products,
+              query: args.q,
+              nextCursor,
+              maxPrice: typeof args.max_price === "number" ? args.max_price : undefined,
+              minPrice: typeof args.min_price === "number" ? args.min_price : undefined,
+            },
+          },
+        ],
       };
     }
 
@@ -404,9 +509,12 @@ export async function executeTool(
       const res = await kapruka.listCategories({});
       if (!res.ok) return { result: `Could not load categories: ${res.message}`, cards: [] };
       const categories = res.data.categories || [];
+      // Only render the visual category grid when the model explicitly wants to
+      // show it (real browse intent). Otherwise return names as text only, so a
+      // post-empty-search lookup doesn't dump an irrelevant categories card.
       return {
         result: `Categories: ${categories.map((c: any) => c.name).join(", ")}`,
-        cards: [{ component: "categories", data: { categories } }],
+        cards: args.show === true ? [{ component: "categories", data: { categories } }] : [],
       };
     }
 
@@ -598,7 +706,7 @@ export async function executeTool(
     case "remember": {
       const op = buildProfileOp(args);
       if (!op) return { result: "Nothing specific to remember from that.", cards: [] };
-      return { result: "Noted — Kapri will remember that.", cards: [{ component: "profile_op", data: op }] };
+      return { result: "Noted — Kamala will remember that.", cards: [{ component: "profile_op", data: op }] };
     }
 
     default:
