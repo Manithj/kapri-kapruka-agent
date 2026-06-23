@@ -146,12 +146,17 @@ export function upcomingOccasions(
       return { label: o.label, date: n.date, inDays: n.inDays, recipientName: o.recipientName, emoji: "🎂" };
     })
     .filter((o) => o.inDays >= 0 && o.inDays <= horizonDays);
-  const holidays = upcomingHolidays(todayISO, horizonDays).map((h) => ({
-    label: h.label,
-    date: h.date,
-    inDays: h.inDays,
-    emoji: h.emoji,
-  }));
+  // Skip a built-in holiday if the user already saved an occasion with the same
+  // name on the same day, so it doesn't appear twice.
+  const seen = new Set(personal.map((o) => `${o.label.toLowerCase().trim()}|${o.date}`));
+  const holidays = upcomingHolidays(todayISO, horizonDays)
+    .filter((h) => !seen.has(`${h.label.toLowerCase().trim()}|${h.date}`))
+    .map((h) => ({
+      label: h.label,
+      date: h.date,
+      inDays: h.inDays,
+      emoji: h.emoji,
+    }));
   return [...personal, ...holidays].sort((a, b) => a.inDays - b.inDays);
 }
 

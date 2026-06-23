@@ -22,6 +22,7 @@ const HOLIDAYS_2026: Holiday[] = [
   { label: "Father's Day", date: "2026-06-21", emoji: "👔" },
   { label: "Esala Poya", date: "2026-06-29", emoji: "🌕" },
   { label: "Nikini Poya", date: "2026-07-28", emoji: "🌕" },
+  { label: "Friendship Day", date: "2026-08-02", emoji: "🤝" },
   { label: "Binara Poya", date: "2026-08-27", emoji: "🌕" },
   { label: "Vap Poya", date: "2026-09-25", emoji: "🌕" },
   { label: "Deepavali", date: "2026-11-08", emoji: "🪔" },

@@ -2,13 +2,13 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Kapri · Kapruka gift concierge",
-    short_name: "Kapri",
+    name: "Kamala · Kapruka gift concierge",
+    short_name: "Kamala",
     description: "Sri Lanka's warmest AI shopping concierge. Chat your way to the perfect gift.",
     start_url: "/",
     display: "standalone",
     background_color: "#FBF7F0",
-    theme_color: "#0E5B4A",
+    theme_color: "#5B2D8E",
     lang: "en",
     categories: ["shopping", "lifestyle"],
     icons: [

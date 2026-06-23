@@ -33,25 +33,28 @@ const sinhala = Noto_Sans_Sinhala({
 });
 
 export const metadata: Metadata = {
-  title: "Kapri · Sri Lanka's warmest AI shopping concierge",
+  title: "Kamala · Sri Lanka's warmest AI shopping concierge",
   description:
-    "Chat your way to the perfect gift. Kapri helps you discover products, quote delivery anywhere in Sri Lanka, and check out — powered by the Kapruka MCP.",
-  applicationName: "Kapri",
+    "Chat your way to the perfect gift. Kamala helps you discover products, quote delivery anywhere in Sri Lanka, and check out — powered by the Kapruka MCP.",
+  applicationName: "Kamala",
   manifest: "/manifest.webmanifest",
-  appleWebApp: { capable: true, title: "Kapri", statusBarStyle: "default" },
+  appleWebApp: { capable: true, title: "Kamala", statusBarStyle: "default" },
   icons: {
-    icon: "/icon-192.png",
+    icon: [
+      { url: "/favicon.svg?v=2", type: "image/svg+xml" },
+      { url: "/icon-192.png", type: "image/png" },
+    ],
     apple: "/apple-touch-icon.png",
   },
   openGraph: {
-    title: "Kapri · Sri Lanka's warmest AI shopping concierge",
+    title: "Kamala · Sri Lanka's warmest AI shopping concierge",
     description: "Chat your way to the perfect gift. Powered by Kapruka.",
     type: "website",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0E5B4A",
+  themeColor: "#5B2D8E",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Minus, Package, Pencil, Plus, ShoppingBag, Trash2, X } from "lucide-react";
-import { cartTotal, formatMoney, isCake } from "@/lib/format";
+import { cartCount, cartTotal, formatMoney, isCake } from "@/lib/format";
 import IcingPreview from "./IcingPreview";
 import type { CartItem } from "@/lib/types";
 
@@ -15,6 +15,7 @@ export default function CartDrawer({
   onQty,
   onRemove,
   onIcing,
+  onClearAll,
   onCheckout,
 }: {
   open: boolean;
@@ -25,10 +26,12 @@ export default function CartDrawer({
   onQty: (id: string, delta: number) => void;
   onRemove: (id: string) => void;
   onIcing?: (id: string, text: string) => void;
+  onClearAll?: () => void;
   onCheckout: () => void;
 }) {
   const currency = items[0]?.currency ?? "LKR";
   const total = cartTotal(items);
+  const count = cartCount(items);
   const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -70,6 +73,11 @@ export default function CartDrawer({
           <div className="flex items-center gap-2">
             <ShoppingBag className="h-5 w-5 text-emerald-deep" />
             <h2 className="font-display text-lg font-semibold text-emerald-ink">Your cart</h2>
+            {count > 0 ? (
+              <span className="rounded-full bg-emerald-soft px-2 py-0.5 text-xs font-medium text-emerald-deep">
+                {count} {count === 1 ? "item" : "items"}
+              </span>
+            ) : null}
           </div>
           <button onClick={onClose} aria-label="Close cart" className="rounded-lg p-1.5 text-ink/50 hover:bg-cream-200">
             <X className="h-5 w-5" />
@@ -82,7 +90,7 @@ export default function CartDrawer({
               <div className="grid h-16 w-16 place-items-center rounded-full bg-emerald-soft">
                 <Package className="h-7 w-7 text-emerald-deep/50" />
               </div>
-              <p className="text-sm">Your cart is empty.<br />Ask Kapri to find you something lovely 🎁</p>
+              <p className="text-sm">Your cart is empty.<br />Ask Kamala to find you something lovely 🎁</p>
             </div>
           ) : (
             <ul className="space-y-2">
@@ -123,11 +131,21 @@ export default function CartDrawer({
             </div>
             <button
               onClick={onCheckout}
-              className="w-full rounded-xl bg-gold px-4 py-3 text-sm font-semibold text-emerald-ink transition hover:brightness-105"
+              className="w-full rounded-xl bg-kapruka-purple px-4 py-3 text-sm font-semibold text-cream-50 transition hover:bg-kapruka-dark"
             >
-              Checkout with Kapri →
+              Checkout with Kamala →
             </button>
             <p className="mt-2 text-center text-xs text-ink/45">Delivery fee added at checkout</p>
+            {onClearAll ? (
+              <button
+                onClick={() => {
+                  if (confirm("Clear your entire cart?")) onClearAll();
+                }}
+                className="mt-2 w-full text-center text-sm text-ink/40 transition hover:text-clay"
+              >
+                Clear cart
+              </button>
+            ) : null}
           </footer>
         ) : null}
       </aside>
