@@ -206,13 +206,15 @@ export default function Chat() {
   }, []);
 
   const addProductToCart = useCallback(
-    (p: Product, qty = 1, opts?: { icing_text?: string }) => {
+    (p: Product, qty = 1, opts?: { icing_text?: string; custom_text?: string; custom_photo?: string }) => {
       setCart((prev) => {
         const next = [...prev];
         const ex = next.find((c) => c.product_id === p.id);
         if (ex) {
           ex.quantity = Math.min(99, ex.quantity + qty);
           if (opts?.icing_text) ex.icing_text = opts.icing_text;
+          if (opts?.custom_text) ex.custom_text = opts.custom_text;
+          if (opts?.custom_photo) ex.custom_photo = opts.custom_photo;
         } else
           next.push({
             product_id: p.id,
@@ -222,6 +224,8 @@ export default function Chat() {
             currency: p.price.currency,
             quantity: qty,
             icing_text: opts?.icing_text ?? null,
+            custom_text: opts?.custom_text ?? null,
+            custom_photo: opts?.custom_photo ?? null,
           });
         return next;
       });
@@ -294,7 +298,9 @@ export default function Chat() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messages: wire,
-            cart: cartRef.current,
+            // Strip photo bytes: the server only needs to know a photo exists, not
+            // the (potentially multi-MB) data URL it can't transmit to Kapruka anyway.
+            cart: cartRef.current.map((c) => (c.custom_photo ? { ...c, custom_photo: "attached" } : c)),
             currency: "LKR",
             profile: profileToWire(profileRef.current, new Date().toISOString().slice(0, 10)),
           }),
@@ -321,7 +327,20 @@ export default function Chat() {
             setChips(ev.values);
           } else if (ev.type === "ui") {
             if (ev.card.component === "cart_op") {
-              setCart(ev.card.data.items);
+              // The server cart strips photo bytes (sent as "attached"). Re-hydrate
+              // each line's local custom_photo data URL by product_id so previews
+              // survive a model-driven cart change.
+              const serverItems = ev.card.data.items;
+              setCart((prev) => {
+                const photoById = new Map(
+                  prev.filter((c) => c.custom_photo && c.custom_photo !== "attached").map((c) => [c.product_id, c.custom_photo!])
+                );
+                return serverItems.map((it) =>
+                  it.custom_photo === "attached" && photoById.has(it.product_id)
+                    ? { ...it, custom_photo: photoById.get(it.product_id)! }
+                    : it
+                );
+              });
               if (ev.card.data.op === "add") {
                 const last = ev.card.data.items[ev.card.data.items.length - 1];
                 showToast("Added to your cart 🛒", last?.image);
@@ -580,7 +599,7 @@ function MessageRow({
   streaming: boolean;
   toolRunning: string | null;
   avatarState: AvatarState;
-  onAdd: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
+  onAdd: (p: Product, qty?: number, opts?: { icing_text?: string; custom_text?: string; custom_photo?: string }) => void;
   onAddMany: (items: BundleItem[]) => void;
   onPrompt: (t: string, wireText?: string) => void;
 }) {

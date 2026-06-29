@@ -169,9 +169,12 @@ function CartLine({
 
   return (
     <li className="flex gap-3 rounded-xl border border-black/5 bg-white p-2.5">
-      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-cream-200">
+      <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-cream-200">
         {cake && it.icing_text ? (
           <IcingPreview image={it.image} text={it.icing_text} className="h-full w-full" />
+        ) : it.custom_photo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={it.custom_photo} alt={`${it.name} photo`} className="h-full w-full object-cover" />
         ) : it.image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={it.image} alt={it.name} className="h-full w-full object-cover" />
@@ -180,6 +183,11 @@ function CartLine({
             <Package className="h-6 w-6" />
           </div>
         )}
+        {it.custom_photo ? (
+          <span className="absolute bottom-0.5 right-0.5 rounded bg-kapruka-purple/90 px-1 py-px text-[8px] font-semibold text-white">
+            PHOTO
+          </span>
+        ) : null}
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <p className="line-clamp-2 text-sm font-medium leading-snug">{it.name}</p>
@@ -209,6 +217,9 @@ function CartLine({
           )
         ) : it.icing_text ? (
           <p className="text-xs text-ink/50">Icing: “{it.icing_text}”</p>
+        ) : null}
+        {it.custom_text ? (
+          <p className="line-clamp-1 text-xs text-kapruka-purple/80">✍️ “{it.custom_text}”</p>
         ) : null}
         <span className="text-sm font-semibold text-emerald-deep">
           {formatMoney((it.price ?? 0) * it.quantity, it.currency)}
