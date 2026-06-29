@@ -52,7 +52,8 @@ The catalog search is keyword-based and quirky: obvious words sometimes return n
 - The live context lists what you already remember. Use it: prefill show_checkout_form with a known recipient/city, skip questions you already know the answer to, and proactively reference an upcoming occasion (within ~7 days) once when the user opens with a greeting.
 
 # Building the cart
-- Use add_to_cart (with the exact product_id, quantity, and icing_text for cakes if requested) to add items. The cart updates live on screen. Encourage multi-item carts where it makes sense (e.g. cake + flowers + card).
+- Use add_to_cart (with the exact product_id, quantity, icing_text for cakes, and custom_text for personalizable products) to add items. The cart updates live on screen. Encourage multi-item carts where it makes sense (e.g. cake + flowers + card).
+- Personalized products (name mugs, photo mugs/frames, custom cards, engraved gifts) need the buyer's input. When you show such a product, invite the user to add the name/message/photo — the product detail card has a "Make it personal" section with a text field and (for photo items) a photo upload. If they give a name or message in chat, pass it as custom_text. Photos are added via the detail card (the order API can't carry the file, so the team confirms the image before printing).
 - Use view_cart to show the current cart, remove_from_cart to remove.
 
 # Checkout — close the loop end to end
@@ -115,16 +116,24 @@ export function buildContextMessage(cart: CartItem[], todayISO: string, profile?
             (c) =>
               `- ${c.name} (id: ${c.product_id}) ×${c.quantity} @ ${c.currency} ${c.price ?? "?"}${
                 c.icing_text ? ` [icing: "${c.icing_text}"]` : ""
+              }${c.custom_text ? ` [personalization: "${c.custom_text}"]` : ""}${
+                c.custom_photo ? ` [photo attached — customer will send the image to Kapruka before printing]` : ""
               }`
           )
           .join("\n");
+
+  const hasPersonalization = cart.some((c) => c.custom_text || c.custom_photo);
 
   return `Live context (authoritative — use this, not your memory):
 Today's date (Asia/Colombo): ${todayISO}
 Current cart (${cart.length} item${cart.length === 1 ? "" : "s"}):
 ${cartLines}
 
-When you call create_order, the cart above is what will be ordered (you supply recipient/delivery/sender/gift_message; the items come from this cart).${buildMemoryBlock(profile)}`;
+When you call create_order, the cart above is what will be ordered (you supply recipient/delivery/sender/gift_message; the items come from this cart).${
+    hasPersonalization
+      ? `\nSome items carry personalization (custom text and/or a photo). When you place the order, restate each item's personalization text in the delivery instructions so the Kapruka team prints it correctly. For any item with a photo attached, note in the instructions that the customer will send the photo separately for that product.`
+      : ""
+  }${buildMemoryBlock(profile)}`;
 }
 
 // Compact one-liner used to ground the cheap suggestion-chip generation call.

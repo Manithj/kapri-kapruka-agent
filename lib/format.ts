@@ -32,3 +32,39 @@ export function isCake(p: { name?: string; category?: { name?: string } }): bool
   if (/cake|gateau|gâteau|cheesecake/.test(hay)) return true;
   return false;
 }
+
+type CustomizableInput = {
+  name?: string;
+  category?: { name?: string };
+  description?: string;
+  summary?: string;
+};
+
+function customHay(p: CustomizableInput): string {
+  return `${p.name ?? ""} ${p.category?.name ?? ""} ${p.summary ?? ""} ${p.description ?? ""}`.toLowerCase();
+}
+
+// Heuristic: does this product need a custom photo from the buyer (photo mug,
+// photo frame, collage…)? The MCP exposes no personalization metadata, so we
+// sniff name/category/description. Photo items imply personalizable too.
+export function needsPhoto(p: CustomizableInput): boolean {
+  const hay = customHay(p);
+  return /\bphoto\b|picture|collage|photo[\s-]?frame|photo[\s-]?mug/.test(hay);
+}
+
+// Heuristic: is this a personalizable product (name to print, custom message,
+// dedication, photo…) — excluding cakes, which already have their own icing flow.
+export function isPersonalizable(p: CustomizableInput): boolean {
+  if (isCake(p)) return false;
+  if (needsPhoto(p)) return true;
+  const hay = customHay(p);
+  return /personali[sz]ed|custom(?:i[sz]ed)?\b|your name|name (?:mug|print|gift)|add your|engrav|monogram/.test(hay);
+}
+
+// Adaptive label for the text input based on what the product seems to want.
+export function customTextLabel(p: CustomizableInput): string {
+  const hay = customHay(p);
+  if (/\bcard\b|greeting/.test(hay)) return "Your message";
+  if (/name/.test(hay)) return "Name to print";
+  return "Personalization";
+}

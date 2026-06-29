@@ -106,6 +106,11 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           product_id: { type: "string" },
           quantity: { type: "integer", description: "1-99. Default 1." },
           icing_text: { type: "string", description: "Icing message for cakes only (ignored otherwise)." },
+          custom_text: {
+            type: "string",
+            description:
+              "Personalization text for custom products (name to print on a mug, message for a personalized card, dedication, etc.). Use when the user gives a name/message for a personalizable item.",
+          },
         },
         required: ["product_id"],
       },
@@ -411,6 +416,7 @@ function upsertCart(cart: CartItem[], item: CartItem) {
   if (existing) {
     existing.quantity = Math.min(99, existing.quantity + item.quantity);
     if (item.icing_text) existing.icing_text = item.icing_text;
+    if (item.custom_text) existing.custom_text = item.custom_text;
   } else {
     cart.push(item);
   }
@@ -555,6 +561,7 @@ export async function executeTool(
         currency: p.price.currency,
         quantity: qty,
         icing_text: args.icing_text ?? null,
+        custom_text: args.custom_text ?? null,
       };
       upsertCart(ctx.cart, item);
       return {
@@ -610,7 +617,9 @@ export async function executeTool(
         cart: ctx.cart.map((c) => ({
           product_id: c.product_id,
           quantity: c.quantity,
-          ...(c.icing_text ? { icing_text: c.icing_text } : {}),
+          // For custom (non-cake) products the personalization text rides on the
+          // same per-item text field the MCP uses for cake icing.
+          ...(c.icing_text || c.custom_text ? { icing_text: c.icing_text || c.custom_text } : {}),
         })),
         recipient: args.recipient,
         delivery: {
