@@ -55,6 +55,12 @@ export interface CartItem {
   currency: string;
   quantity: number;
   icing_text?: string | null;
+  // Generic personalization for non-cake custom products (name to print, message,
+  // dedication…). Flows to create_order as a per-item note.
+  custom_text?: string | null;
+  // Optional photo for photo-mugs/frames. Data URL — preview only; the Kapruka
+  // order API can't carry the file, so this never leaves the browser.
+  custom_photo?: string | null;
 }
 
 export interface Category {

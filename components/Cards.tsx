@@ -60,7 +60,7 @@ import {
   Wine,
   X,
 } from "lucide-react";
-import { formatMoney, cartTotal, isCake } from "@/lib/format";
+import { formatMoney, cartTotal, isCake, isPersonalizable, needsPhoto, customTextLabel } from "@/lib/format";
 import IcingPreview from "./IcingPreview";
 import Confetti from "./Confetti";
 import type { BundleItem, Product, UICard } from "@/lib/types";
@@ -108,7 +108,7 @@ function StockBadge({ inStock, level }: { inStock?: boolean; level?: string }) {
 }
 
 interface CardActions {
-  onAdd?: (p: Product, qty?: number, opts?: { icing_text?: string }) => void;
+  onAdd?: (p: Product, qty?: number, opts?: { icing_text?: string; custom_text?: string; custom_photo?: string }) => void;
   onAddMany?: (items: BundleItem[]) => void;
   // wireText (optional) is sent to the model in place of the visible bubble text.
   onPrompt?: (text: string, wireText?: string) => void;
@@ -188,6 +188,19 @@ function useDragScroll() {
 
 /* ---------- product card (used in carousel) ---------- */
 
+// "Choose-your-amount" products (gift vouchers / gift cards) ship many price
+// denominations as variants, but search only exposes the base price. Detected by
+// name/category since the search result carries no variant signal.
+function isChooseAmount(p: Product): boolean {
+  return /gift\s*voucher|e-?\s*gift|gift\s*card|gift\s*cert/i.test(`${p.name} ${p.category?.name ?? ""}`);
+}
+
+// Whether a quick-add (+) should instead open the detail view: vouchers (pick a
+// denomination) and personalizable products (add a name/message/photo).
+function shouldOpenDetail(p: Product): boolean {
+  return isChooseAmount(p) || isPersonalizable(p);
+}
+
 function ProductCard({
   p,
   onAdd,
@@ -199,8 +212,17 @@ function ProductCard({
 }) {
   const discounted = p.compare_at_price?.amount && p.price.amount && p.compare_at_price.amount > p.price.amount;
   const [added, setAdded] = useState(false);
+  // Vouchers open the detail view to pick a denomination; personalizable products
+  // (name mugs, photo frames…) open it to collect a name/message/photo. Either
+  // way the + opens details rather than quick-adding blind.
+  const chooseAmount = isChooseAmount(p);
+  const needsDetail = shouldOpenDetail(p);
   const handleAdd = () => {
     if (p.in_stock === false) return;
+    if (needsDetail) {
+      onPrompt?.(`Show me details for ${p.name}`);
+      return;
+    }
     onAdd?.(p);
     setAdded(true);
     setTimeout(() => setAdded(false), 1300);
@@ -218,6 +240,7 @@ function ProductCard({
       <div className="flex flex-1 flex-col gap-1.5 p-3">
         <p className="line-clamp-2 text-sm font-medium leading-snug text-ink">{p.name}</p>
         <div className="mt-auto flex items-baseline gap-1.5">
+          {chooseAmount ? <span className="text-xs font-medium text-ink/50">from</span> : null}
           <span className="font-display text-base font-semibold text-emerald-deep">
             {formatMoney(p.price.amount, p.price.currency)}
           </span>
@@ -240,7 +263,14 @@ function ProductCard({
           <button
             onClick={handleAdd}
             disabled={p.in_stock === false}
-            aria-label={`Add ${p.name} to cart`}
+            aria-label={
+              chooseAmount
+                ? `Choose an amount for ${p.name}`
+                : needsDetail
+                ? `Personalize ${p.name}`
+                : `Add ${p.name} to cart`
+            }
+            title={chooseAmount ? "Choose an amount" : needsDetail ? "Personalize first" : undefined}
             className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-emerald-ink transition disabled:cursor-not-allowed disabled:opacity-40 ${
               added ? "bg-gold" : "bg-gold hover:brightness-110"
             }`}
@@ -380,11 +410,39 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
   const p = data.product;
   const [active, setActive] = useState(0);
   const [icing, setIcing] = useState("");
+  // Selectable variant (e.g. gift-voucher denomination). Default to the first
+  // in-stock variant so "Add to Basket" never silently adds an out-of-stock one.
+  const variants = p.variants ?? [];
+  const [variantId, setVariantId] = useState<string | null>(() => {
+    if (!variants.length) return null;
+    return (variants.find((v) => v.in_stock !== false) ?? variants[0]).id;
+  });
+  const selectedVariant = variants.find((v) => v.id === variantId) ?? null;
   const cake = isCake(p);
+  // Personalizable (non-cake) products: a custom-text field + optional photo.
+  const personalizable = isPersonalizable(p);
+  const photoItem = needsPhoto(p);
+  const [customText, setCustomText] = useState("");
+  const [customPhoto, setCustomPhoto] = useState<string | null>(null);
   const imgs = p.images && p.images.length ? p.images : p.image_url ? [p.image_url] : [];
   const attrs = p.attributes;
   const hasDetails = attrs && (attrs.type || attrs.subtype || hasWeight(attrs.weight) || attrs.vendor);
   const name = p.name.replace(/\s+/g, " ").trim();
+  // The price shown + added reflects the chosen variant when there is one.
+  const shownPrice = selectedVariant?.price ?? p.price;
+  const addDisabled = selectedVariant ? selectedVariant.in_stock === false : p.in_stock === false;
+  // Build the cart item: a selected variant carries its own id/name/price so it
+  // flows through checkout as that exact denomination.
+  const handleAddToBasket = () => {
+    const target: Product = selectedVariant
+      ? { ...p, id: selectedVariant.id, name: selectedVariant.name, price: selectedVariant.price }
+      : p;
+    const opts: { icing_text?: string; custom_text?: string; custom_photo?: string } = {};
+    if (cake && icing.trim()) opts.icing_text = icing.trim();
+    if (personalizable && customText.trim()) opts.custom_text = customText.trim();
+    if (personalizable && customPhoto) opts.custom_photo = customPhoto;
+    onAdd?.(target, 1, Object.keys(opts).length ? opts : undefined);
+  };
 
   return (
     <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
@@ -453,7 +511,7 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
 
         {/* price */}
         <p className="mt-2 font-display text-2xl font-semibold text-ink">
-          {formatMoney(p.price.amount, p.price.currency)}
+          {formatMoney(shownPrice.amount, shownPrice.currency)}
         </p>
 
         {/* description */}
@@ -461,32 +519,53 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
           <p className="mt-2 text-sm leading-relaxed text-ink/70">{p.description.replace(/\s+/g, " ").trim()}</p>
         ) : null}
 
-        {/* variants */}
-        {p.variants && p.variants.length ? (
+        {/* variants — selectable; the chosen one drives the price + Add to Basket */}
+        {variants.length ? (
           <div className="mt-4">
-            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink/45">Variants</p>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink/45">
+              Choose an option
+            </p>
             <div className="space-y-2">
-              {p.variants.map((v) => (
-                <div key={v.id} className="rounded-xl border border-black/10 px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-ink">{v.name}</p>
-                      {v.sku ? <p className="font-mono text-[11px] text-ink/40">{v.sku}</p> : null}
-                      {hasWeight(v.attributes?.weight) ? (
-                        <p className="text-xs text-ink/55">Weight: {v.attributes!.weight}</p>
-                      ) : null}
+              {variants.map((v) => {
+                const selected = v.id === variantId;
+                const soldOut = v.in_stock === false;
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => !soldOut && setVariantId(v.id)}
+                    disabled={soldOut}
+                    aria-pressed={selected}
+                    className={`flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition ${
+                      selected ? "border-kapruka-purple bg-kapruka-purple/5 ring-1 ring-kapruka-purple/30" : "border-black/10 hover:border-kapruka-purple/40"
+                    } ${soldOut ? "cursor-not-allowed opacity-50" : ""}`}
+                  >
+                    <div className="flex min-w-0 items-start gap-2.5">
+                      <span
+                        className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border-2 transition ${
+                          selected ? "border-kapruka-purple" : "border-black/25"
+                        }`}
+                      >
+                        {selected ? <span className="h-2 w-2 rounded-full bg-kapruka-purple" /> : null}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-ink">{v.name}</p>
+                        {hasWeight(v.attributes?.weight) ? (
+                          <p className="text-xs text-ink/55">Weight: {v.attributes!.weight}</p>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-sm font-semibold text-ink">{formatMoney(v.price.amount, v.price.currency)}</p>
-                      {v.stock_level === "low" ? (
+                      {v.stock_level === "low" && !soldOut ? (
                         <p className="text-[11px] font-medium text-[#9a7a2c]">Low stock</p>
-                      ) : v.in_stock === false ? (
+                      ) : soldOut ? (
                         <p className="text-[11px] font-medium text-clay">Out of stock</p>
                       ) : null}
                     </div>
-                  </div>
-                </div>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -534,14 +613,69 @@ function ProductDetailCard({ data, onAdd }: { data: { product: Product }; onAdd?
           </label>
         ) : null}
 
+        {/* personalization for custom products (name/message + optional photo) */}
+        {personalizable ? (
+          <div className="mt-4 rounded-xl border border-kapruka-purple/25 bg-kapruka-purple/[0.04] p-3">
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-kapruka-purple">
+              <Sparkles className="h-4 w-4" /> Make it personal
+            </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-ink/60">{customTextLabel(p)}</span>
+              <input
+                value={customText}
+                onChange={(e) => setCustomText(e.target.value.slice(0, 80))}
+                placeholder={photoItem ? "e.g. Happy Birthday Amma!" : "e.g. Adithya"}
+                className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none transition focus:border-kapruka-purple/50"
+              />
+            </label>
+            {photoItem ? (
+              <div className="mt-2">
+                {customPhoto ? (
+                  <div className="flex items-center gap-3">
+                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-black/10 bg-cream-200">
+                      <Img src={customPhoto} alt="Your photo" className="h-full w-full object-cover" />
+                    </div>
+                    <button
+                      onClick={() => setCustomPhoto(null)}
+                      className="text-xs font-medium text-clay underline-offset-2 hover:underline"
+                    >
+                      Remove photo
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-kapruka-purple/40 bg-white px-3 py-2.5 text-sm font-medium text-kapruka-purple transition hover:bg-kapruka-purple/5">
+                    <Camera className="h-4 w-4" /> Add your photo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => setCustomPhoto(reader.result as string);
+                        reader.readAsDataURL(file);
+                      }}
+                    />
+                  </label>
+                )}
+                <p className="mt-1.5 text-[11px] leading-snug text-ink/45">
+                  Photo preview is saved with your order note — Kapruka will confirm the final image with you before printing.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {/* actions */}
         <div className="mt-4 flex gap-2">
           <button
-            onClick={() => onAdd?.(p, 1, cake && icing.trim() ? { icing_text: icing.trim() } : undefined)}
-            disabled={p.in_stock === false}
+            onClick={handleAddToBasket}
+            disabled={addDisabled}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-kapruka-purple px-4 py-2.5 text-sm font-semibold text-cream-50 transition hover:bg-kapruka-dark disabled:opacity-40"
           >
-            <ShoppingBag className="h-4 w-4" /> Add to Basket
+            <ShoppingBag className="h-4 w-4" />
+            {selectedVariant ? `Add ${formatMoney(shownPrice.amount, shownPrice.currency)}` : "Add to Basket"}
           </button>
           {p.url ? (
             <a
@@ -1218,7 +1352,15 @@ function BundleCard({
 
 /* ---------- product comparison ---------- */
 
-function CompareCard({ data, onAdd }: { data: { products: Product[] }; onAdd?: CardActions["onAdd"] }) {
+function CompareCard({
+  data,
+  onAdd,
+  onPrompt,
+}: {
+  data: { products: Product[] };
+  onAdd?: CardActions["onAdd"];
+  onPrompt?: (t: string) => void;
+}) {
   const products = data.products.slice(0, 4);
   return (
     <div className="animate-fade-up overflow-hidden rounded-2xl border border-black/5 bg-white shadow-card">
@@ -1226,31 +1368,34 @@ function CompareCard({ data, onAdd }: { data: { products: Product[] }; onAdd?: C
         <Scale className="h-4 w-4 text-gold" /> Comparing {products.length} options
       </div>
       <div className="grid" style={{ gridTemplateColumns: `repeat(${products.length}, minmax(0, 1fr))` }}>
-        {products.map((p) => (
-          <div key={p.id} className="flex flex-col gap-2 border-l border-black/5 p-3 first:border-l-0">
-            <div className="aspect-square overflow-hidden rounded-lg bg-cream-200">
-              <Img src={p.image_url} alt={p.name} className="h-full w-full object-cover" />
+        {products.map((p) => {
+          const needsDetail = shouldOpenDetail(p);
+          return (
+            <div key={p.id} className="flex flex-col gap-2 border-l border-black/5 p-3 first:border-l-0">
+              <div className="aspect-square overflow-hidden rounded-lg bg-cream-200">
+                <Img src={p.image_url} alt={p.name} className="h-full w-full object-cover" />
+              </div>
+              <p className="line-clamp-2 text-xs font-medium leading-snug text-ink">{p.name}</p>
+              <div className="flex flex-wrap items-baseline gap-1">
+                <span className="text-sm font-semibold text-emerald-deep">{formatMoney(p.price.amount, p.price.currency)}</span>
+                {p.compare_at_price?.amount && p.price.amount && p.compare_at_price.amount > p.price.amount ? (
+                  <span className="text-[11px] text-ink/40 line-through">
+                    {formatMoney(p.compare_at_price.amount, p.compare_at_price.currency)}
+                  </span>
+                ) : null}
+              </div>
+              <StockBadge inStock={p.in_stock} level={p.stock_level} />
+              {p.category?.name ? <p className="text-[11px] capitalize text-ink/45">{p.category.name}</p> : null}
+              <button
+                onClick={() => (needsDetail ? onPrompt?.(`Show me details for ${p.name}`) : onAdd?.(p))}
+                disabled={p.in_stock === false}
+                className="mt-auto flex items-center justify-center gap-1 rounded-lg bg-emerald-deep px-2 py-1.5 text-xs font-medium text-cream-50 transition hover:bg-emerald-ink disabled:opacity-40"
+              >
+                <Plus className="h-3.5 w-3.5" /> {needsDetail ? "Options" : "Add"}
+              </button>
             </div>
-            <p className="line-clamp-2 text-xs font-medium leading-snug text-ink">{p.name}</p>
-            <div className="flex flex-wrap items-baseline gap-1">
-              <span className="text-sm font-semibold text-emerald-deep">{formatMoney(p.price.amount, p.price.currency)}</span>
-              {p.compare_at_price?.amount && p.price.amount && p.compare_at_price.amount > p.price.amount ? (
-                <span className="text-[11px] text-ink/40 line-through">
-                  {formatMoney(p.compare_at_price.amount, p.compare_at_price.currency)}
-                </span>
-              ) : null}
-            </div>
-            <StockBadge inStock={p.in_stock} level={p.stock_level} />
-            {p.category?.name ? <p className="text-[11px] capitalize text-ink/45">{p.category.name}</p> : null}
-            <button
-              onClick={() => onAdd?.(p)}
-              disabled={p.in_stock === false}
-              className="mt-auto flex items-center justify-center gap-1 rounded-lg bg-emerald-deep px-2 py-1.5 text-xs font-medium text-cream-50 transition hover:bg-emerald-ink disabled:opacity-40"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1279,7 +1424,7 @@ export function CardRenderer({ card, onAdd, onAddMany, onPrompt }: { card: UICar
     case "bundle":
       return <BundleCard data={card.data} onAddMany={onAddMany} onPrompt={onPrompt} />;
     case "compare":
-      return <CompareCard data={card.data} onAdd={onAdd} />;
+      return <CompareCard data={card.data} onAdd={onAdd} onPrompt={onPrompt} />;
     case "checkout_form":
       return <CheckoutFormCard data={card.data} onSubmit={onPrompt} />;
     case "cart_op":
