@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, Mic, X } from "lucide-react";
+import { ArrowUp, ImagePlus, Loader2, Mic, Send, Trash2, X } from "lucide-react";
 import { downscaleImage } from "@/lib/image";
+import VoiceWaveform from "./VoiceWaveform";
 
 export default function Composer({
   onSend,
@@ -16,8 +17,16 @@ export default function Composer({
   const [processing, setProcessing] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const cancelledRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -27,23 +36,85 @@ export default function Composer({
   }, [text]);
 
   useEffect(() => {
-    setVoiceSupported("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+    setVoiceSupported(
+      typeof navigator !== "undefined" &&
+        !!navigator.mediaDevices?.getUserMedia &&
+        typeof window !== "undefined" &&
+        "MediaRecorder" in window,
+    );
   }, []);
 
-  function startVoice() {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return;
-    const recog = new SR();
-    recog.lang = "en-LK";
-    recog.interimResults = false;
-    recog.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      setText((prev) => (prev ? prev + " " : "") + transcript);
-    };
-    recog.onend = () => setListening(false);
-    recog.onerror = () => setListening(false);
-    recog.start();
-    setListening(true);
+  useEffect(() => () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, []);
+
+  // Send a recorded clip to OpenAI Whisper (browser-independent, multilingual).
+  async function transcribe(blob: Blob) {
+    setTranscribing(true);
+    try {
+      const form = new FormData();
+      form.append("audio", blob, "speech.webm");
+      const res = await fetch("/api/transcribe", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Transcription failed");
+      const t = (data.text || "").trim();
+      if (t) setText((prev) => (prev ? prev + " " : "") + t);
+      else setVoiceError("Didn't catch that — try speaking again.");
+    } catch (err: any) {
+      setVoiceError(err?.message || "Transcription failed");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function startVoice() {
+    setVoiceError(null);
+    cancelledRef.current = false;
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(mic);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        mic.getTracks().forEach((t) => t.stop());
+        if (timerRef.current) clearInterval(timerRef.current);
+        setListening(false);
+        setStream(null);
+        setElapsed(0);
+        recorderRef.current = null;
+        if (cancelledRef.current) return;
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        if (blob.size > 0) transcribe(blob);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setStream(mic);
+      setListening(true);
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+    } catch (err: any) {
+      const msg =
+        err?.name === "NotAllowedError"
+          ? "Mic blocked. Allow microphone access in the address bar."
+          : err?.name === "NotFoundError"
+            ? "No microphone found."
+            : `Couldn't start mic: ${err?.message || err}`;
+      setVoiceError(msg);
+    }
+  }
+
+  // Stop recording and transcribe into the box.
+  function finishVoice() {
+    cancelledRef.current = false;
+    recorderRef.current?.stop();
+  }
+
+  // Stop recording and discard — no transcription.
+  function cancelVoice() {
+    cancelledRef.current = true;
+    recorderRef.current?.stop();
   }
 
   async function addFiles(files: FileList | File[]) {
@@ -63,6 +134,8 @@ export default function Composer({
     }
   }
 
+  const mmss = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+
   function submit() {
     const t = text.trim();
     if ((!t && images.length === 0) || disabled || processing) return;
@@ -73,6 +146,9 @@ export default function Composer({
 
   return (
     <div className="rounded-2xl border border-black/10 bg-white p-2 shadow-card focus-within:border-emerald-deep/40">
+      {voiceError ? (
+        <div className="mb-1 px-2 text-xs text-clay">{voiceError}</div>
+      ) : null}
       {images.length > 0 ? (
         <div className="flex flex-wrap gap-2 px-1 pb-2">
           {images.map((src, i) => (
@@ -90,6 +166,28 @@ export default function Composer({
           ))}
         </div>
       ) : null}
+      {listening && stream ? (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={cancelVoice}
+            aria-label="Cancel recording"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-ink/50 transition hover:bg-cream-200 hover:text-clay"
+          >
+            <Trash2 className="h-5 w-5" />
+          </button>
+          <span className="grid h-10 shrink-0 place-items-center px-1 text-sm font-medium tabular-nums text-clay">
+            {mmss}
+          </span>
+          <VoiceWaveform stream={stream} />
+          <button
+            onClick={finishVoice}
+            aria-label="Stop and transcribe"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gold text-emerald-ink transition hover:brightness-105"
+          >
+            <Send className="h-5 w-5" />
+          </button>
+        </div>
+      ) : (
       <div className="flex items-end gap-2">
         <input
           ref={fileRef}
@@ -113,13 +211,11 @@ export default function Composer({
         {voiceSupported ? (
           <button
             onClick={startVoice}
-            disabled={disabled || listening}
+            disabled={disabled || transcribing}
             aria-label="Voice input"
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl transition disabled:cursor-not-allowed ${
-              listening ? "animate-pulse bg-clay/10 text-clay" : "text-emerald-deep hover:bg-cream-200 disabled:opacity-30"
-            }`}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-emerald-deep transition hover:bg-cream-200 disabled:cursor-not-allowed disabled:opacity-30"
           >
-            <Mic className="h-5 w-5" />
+            {transcribing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Mic className="h-5 w-5" />}
           </button>
         ) : null}
         <textarea
@@ -152,6 +248,7 @@ export default function Composer({
           <ArrowUp className="h-5 w-5" />
         </button>
       </div>
+      )}
     </div>
   );
 }
